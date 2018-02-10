@@ -67,7 +67,7 @@ Here's the way forward... I want to be able to bootstrap myself into really powe
 `/Users/colemanbroaddus/Desktop/Projects/fisheye/fisheye_mosaic_iso.ilp` is the project. The labeling is quite sparse. 
 # ilastik 3: `img006.ilp`
 
-How do we know when the classifier is good enough? When is it ready? How do we include info from both channels in the segmentation?
+*How do we know when the classifier is good enough? When is it ready? How do we include info from both channels in the segmentation?*
 
 1. The nuc env channel is incorporated in the nuclear channel, so a simple segmentation of nuclear channel is already useful.
 2. The classifier is good enough when the segmentations are good enough. But we should also keep track of classifier accuracy as we add more labels.
@@ -87,6 +87,47 @@ Now how do we know if/how many of these cells are correct? Should we try correct
 I want to be able to quantify the accuracy of my ilastik classifiers. Categorical cross entropy, prececion, accuracy etc are all common metrics for classification problems which should be readily available. Also, it makes sense to replace ilastik with something custom that will let us transition smoothly between RFs, NNs and other learners, etc, and script them for easier analysis. We could even use the first couple layers of a pre-trained NN to do the classification for us!
 
 Now we have to figure out how to train a net using just a very small number of annotations... This is a new problem.
+
+*How accurate is our existing annotation?*
+
+I can't tell. When I view the segmentations inside of the 3D viewer I get the sense that some of the larger nuclei are severley undersegmented, but coming up with a numerical score is difficult. We can use nuclear size distribution as a proxy for accuracy, but we don't a real gold standard annotation, or even a cell centerpoint annotation.
+
+# [idea] Use cell centerpoint annotations as additional info
+
+We've generated cell centerpoint annotation manually using the multi-point tool in Fiji. We should fix this tool! It would be easy to build a tool that segmented and removed the cell as soon as it's centerpoint is annotated.
+
+If we use these the centerpoint annotations to seed a watershed segmentation we get reasonable looking segmentations! Here we've created a version of the original fluorescence image where boundaries between instances are identified (in x&y only?) and colored brightly. This allows us to see the segmentation on top of the original image clearly by scanning through the z stack. See
+`results/res011.mov`. This images has 114 cells in accordance with our manual centerpoint labeling, And it appears to do a reasonable job of identifying instance boundaries, although certainly far from perfect. The cell size distribution (sorted plot of log2 size) is shown in `results/res012.png`. This provides an excellent validation of our earlier idea that the more correct segmentations are the ones that feature this plateau in the cell size distribution! 
+
+But this result came at the cost of a lot of difficult manual centerpoint detection. And there are still mistakes! We're probably missing cells that escaped our notice during centerpoint detection, and many of the segmentations for cells are significantly off or missing. We can improve this segmentation in many ways.
+
+1. Adjust parameters in the watershed to improve visual quality of result.
+2. Use 3D view and nhl features to identify outliers and add new centerpoints.
+3. Add new annotations to the pixelwise classifier data and retrain.
+4. Including the membrane channel in the segmentation. At the membrane (nuclear envelope) signal is only used as input to the classifier, however if a pixel is 90% nuclei, it matters whether the remaining 10% is background vs nuclear envelope!
+
+First, let's visualize the original two-channel image + the envelope prediction as a 3rd channel in color... This looks really great. It's clear that the pixelwise classifier does a good job of identifying the membrane class, and that the membrane class is a good marker for nuclear boundaries. Let's try to resegment but now with explicitly including the membrane probability map in the segmentation... We can immediately see from the size distribution that including the membrane probability in the watershed potential produces a better segmentation! NOPE. After further review it looks like simply NOT blurring the probability maps with a 1px blur before watershed results in the nicer cell size distribution and the difference between including the membrane channel and not is very small. See `results/res013.png`. Blue is size dist with normal watershed potential, no blur, mask<0.5. Orange is same thing but with adding the membrane prob map to the potential.
+
+Despite the nice size distributions, we can still identify small numbers of cells which are either over or under segmented. We can see them in the size distribution as well as in the 3D view. To try and fix the few remaining mistakes I tried using the 3D viewer to annotate the largest nuclei (undersegmentations), followed by fitting the appropriate number of Gaussians in a mixture model. The Gaussian mixtures didn't fit well, and ended up cutting cells in half, see `results/res014.png`. Alternatively we can use the slice viewer to manually identify the correct cell centerpoints for undersegmented cells and add these points to our pointset.
+
+[idea] Can we improve the cell centerpoint annotation workflow by segmenting and removing cells from the image continuously as we mark them? 
+
+Ideally, we would click on a cell centerpoint in 3D, then that cell would be segmented from the underlying probability maps, highlighted in the 3D view and/or removed from the slice and 3D view to allow us to see the remaining cells. And there should be some way for us to control the shape / threshold level of the cell via a slider or keyboard before removing it from view.
+
+We can also make mean or max projections of a non-overlapping (in x,y) subset of cells that are likely undersegmentations, highlight their borders and allow the user to re-assign centerpoints based on clicks. See example img `results/res015.png`.
+
+[question] How will this manual curation approach fare against simply drawing the borders of cells for an instance segmentation?
+
+1. The best way to mark a 2D slice for instance segmentation is to draw cell borders with e.g. value 1, then put marks in the connected component background regions with a different mark, eg 2. And we must be sure that the borders for a single cell are fully 8-connected s.t. cell internals are 4-connected. Drawing densely in 3D is just too time consuming to be worthwhile, but individual slice drawing is possible. This way, as long as the image is predominantly background and cell internals, you only have to mark a small fraction of the available pixels.
+2. We want to compare this approach to one in which random individual pixels are marked for semantic segmentation training, followed by cell centerpoint marking. This makes it relatively easy to get a dense segmentation from labeling a small number of points. 
+
+After adding centerpoint annotation to ImShowStack and annotating a few cell centerpoints we can replace our old centerpoint set with the new one and resegment. In addition to enabling cell centerpoint annotation I've connected the ImShowStack to the spimagine volume renderer s.t. clicking on cells in the stack will identify the segment and highlight the volume inside the volume renderer. It looks like this: `results/res016.mov`. This is a lot of fun, and really helps to give you a sense of your 3D segmentations. Through playing around with this system I've noticed the main remaining problem with the workflow is the poor semantic segmentation map. If I place a cell centerpoint inside of a cell, but outside of the watershed mask then our new cell is just a single voxel segmentation! We can fix this either by increasing the size of the watershed masked region, or by improving the pixelwise classifiers.
+
+[idea] Turn our CARE networks into classifiers by encouraging pixel values to fall into a predetermined number of tight value intervals. Put this term in the loss function in addition to the terms which encourage restoration.
+
+Let's try to improve the pixelwise classifier available by making use of neural networks. Let's see if the amount of training data available is sufficient for our purposes. If Not, then we can add hints from the output of the ilastik RFs...
+
+
 
 # replace ilastik with tiny nets
 
