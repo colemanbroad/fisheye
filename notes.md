@@ -24,6 +24,7 @@
 
 `img006.ilp` - obviously matches with the img006 input data...
 
+
 # Which combination of markers is best?
 
 We're trying to segment and track cells in the retina in 3D. The retina is densely packed with cells, and we would like to track as many as possible. We have two different potential markers:
@@ -217,3 +218,120 @@ Recreate the features using slow scikit. What are the features?
 It's a problem because of the time and space required to move 14 GB of data to my disk, rearrange it, crop it, store it, etc. You just crop a small region of the image that looks interesting.
 
 The Crop tool is Broken in Fiji! When I try to crop an 5D image it copies the first frame to EVERY OTHER FRAME. WTF. It keeps X,Y, and C, but every other Z, and T is just a copy of the first one...
+# [problem] unet can't learn
+
+After training our first unet on the small number (12k) individual labels from the ilastik dataset we see that the net is incapable of learning anything. All pixels are predicted as class 3. We can proceed in several ways:
+
+1. add more training data
+2. change the net architecture (make it smaller?)
+3. change the loss (we already set the class weights for unknown pixels to zero!)
+4. or include the previous RF predictions in the prediction target.
+
+No. 4 seems like the most likely candidate. It would certainly give us enough data. It requires a change in the loss as well. How do we balance real labels and RF predictions? What loss do we use on the RF probabilities? L2? or the exact same binary crossentropy as before? We can use the exact same crossentropy as before! This is just the expected value of the CE for each of the different classes. Another possibility would be to use the Kullback-Leibler divergence to minimize the difference between the distributions.
+
+Now I want to be able to see my training as it's happening. This requires Tensorboard. My validation loss doesn't seem to decrease. And my accuracy has also been constant, despite train loss going from 2.0 to 0.36... What CE loss should we expect for random guessing from three classes with balanced data?
+
+I wonder if my lack of training examples causes the problem? I'm training only on the first time point (where all the pixelwise annotations are). I use 71 samples == z-slices and batch size = 1. And my loss gets stuck at 0.35 very quickly. If i reshape my data s.t. I have 16x100x100 instead of 400x400 sized images then this will help my loss explore and take gradient steps in new directions. Loss is stuck at 3.5. Increase batch size to 10. OK. I realize now I should probably normalize s.t. my pixel values aren't in the 1000's... Let's first try normalizing the means to 1... This definitely helps. The loss goes immediately down to the 0.2x range and the accuracy keeps rising up to about 80%... Now let's try reducing the importance of the non-hand-labeled pixels by simply multiplying all the probabilities across the three classes by a factor 0.10. This should work the same as a weight/mask without the requirement that we change the loss or the shape of ys_. But this changes the absolute value of the CE loss! Now it's 0.015 instead of 0.20. But if instead of multiplying by a constant factor we keep the sum of y_true normalized then we should be fine. But the accuracy still seems to be working. We're now up to 91.3% accuracy. See `weights/w002.h5`.
+
+Now the problem is the probability maps just aren't that good looking. We need to compare them against ilastik through accuracy, CE, and subjective visuals, then we either need to make the Unet 3D or continue playing with the ratio of labels to RF predictions. If we normalize the ys weights we can keep the CE loss consistent in terms of absolute value, and we can reweight the labels s.t. the hand-labels count for the same total amount as RF predictions. This allows us to retrain and bring the loss down to around 0.1 with val_acc > 90%. See `training/t001/`. 
+
+*how should we compare the quality of the RF vs the Unet?*
+
+We can compare the predictions of both the the dense ground truth we have from manual nucleus labeling. Can I access the myers_spim_data from my scripts in my projects space? hmmmm.... 
+
+spimdir="/net/fileserver-nfs/stornext/snfs2/projects/myersspimdata/"
+greencarpet="/net/fileserver-nfs/stornext/snfs4/projects/green-carpet/"
+
+Easy peasy.
+
+# Densely labeled training data
+
+Using the new, densely labeled training data we can re-attempt semantic segmentation... We're starting off from the previous best unet weights, `t001`.
+
+The results are clear. The dense labeling is by far the best one. Even though we've only labeled a mere 10 z slices! The membrane fits nicely to the edge of the nuclei! Just like we demonstrated in our labelings... The only difference between the nets was the training data. NO difference in network parameters! See `results/res017.png` and `t002`.
+
+This is a large improvement over the sparse annotations and should improve the segmentations. Let's look at cell size distribution using watershed and potentials from the three different pixelwise classifiers... In `res018.png` we can see how the size distribution improves dramatically as we go from RF to NET and continues to improve if we replace the sparse labels with dense ones. This plot allows us to say a few nice things.
+
+1. Nets are not better than RF solely as a result of being able to soak up more data. They are better even on the same data. [^1]. 
+2. Nets have the ability to learn, even from relatively small annotation data. 12k individual pixels (30 mins spent labeling in ilastik) are sufficient to train a Unet and surpass ilastik performance.
+3. Dense annotations are superior to sparse, given the same amount of time spent labeling. )[^2]
+
+We should also do this comparison on the actual pixelwise prediction accuracy against the ground truth. What is the CE score for each? On each of the datasets? Let's test this. See `scripts/sc001.py`. [^3] 
+
+| Model       | Sparse Accuracy | Sparse CE | Dense Accuracy | Dense CE |
+| RF Sparse   | 1.00,1.00,1.00  | 0.0052972 | .335,.916,.807 | 0.22041  |
+| Unet sparse | .812,.984,.957  | 0.0559251 | .375,.937,.775 | 0.21736  |
+| Unet Dense  | .665,.961,.992  | 0.0785537 | .379,.894,.930 | 0.11159  |
+| RF Dense?   |                 |           |                |          |
+
+[table001]
+
+These numbers are very interesting:
+- The cross entropy score for the sparse RF predicting on it's own training data is *very* low, and the accuracy is perfect! This must be overfitting in the extreme. [^4]
+- The dense unet has lower CE on the sparse data than on it's own training data! What does this mean about the quality of the sparse data?
+- The dense accuracy tells part of the story. The hand-picked labels are roughly evenly balanced between classes, and the models trained on sparse data are biased away from the background, which takes up the majority of the real data. Dense labelings have no class bias! This gives the dense Unet a lower accuracy on nuclei, but a much higher accuracy on background! This is where the bulk of the improvement comes. Surprisingly, it also has a higher accuracy on membrane!
+
+# ISONET - style 3D pixelwise classification
+
+See `training/t003/t003.py`. The goal is to arrive at a better 3D pixelwise segmentation by applying the ISONET technique of restoring image quality in XY, YZ and XZ views independently, all from XY annotations. To make this work we need to 
+
+1. blur the xy slices independently along the axis to be rescaled.
+2. downsample along that axis by taking every nth slice (n=5?). The XY slices should at this point look qualitatively like XZ or YZ slices of the data.
+3. upscale the slices back to their original size with linear (cubic?) interpolation
+4. Train the network to restore the labels. (labels don't change).
+
+When predicting, feed XZ and YZ slices (indpendently) into the network for prediction.
+1. upscale Z by n=5 using linear (cubic?) interpolation
+2. feed XZ and YZ slices into the network independently
+3. Average together (pixelwise) the XZ and YZ stacks. *should we also average them with cubically upscaled versions of the XY predictions?* We could do the following:
+
+1. Train the both an normal and an ISONET style network in the way previously mentioned.
+2. Upscale the stack cubically in z. Feed in the XZ and YZ slices into the ISONET network and the normal XY slices (but now 5x as many slices because of the interpolation!) into the normal network.
+3. Then at the end average all three stacks together!
+
+Actually, the simplest thing would just be to not even train another network! Just try predicting on the upscaled XZ and YZ stacks with the normal net and average them at the end. Maybe it will suck who knows.... Importantly, *training* in that case doesn't even need to use down-uped stacks!
+
+Let's look at these results with our current net... See `training/t004/t004.py`. You can see from `res019` the the XZ view of a net predicting on normal XY slices shows that the envelope region is missing from the Top and Bottom of cells (z is vertical axis in this view). Compare this with the normal XY view of the same data in `res020`. This is also obvious from the 3D view, see `res022` (xy view) and `res023` (side view). This is a consequence of the anisotropy inherent in the training data and in our labeling scheme. We seek to remedy this anisotropy by allowing the net to predict on XZ and YZ views of the same data, hopefully restoring the Tops and Bottoms of our nuclear envelope. In `res021` we can see the result of predicting on transposed, XZ slices (vertical/horizontal are z/x). The cell shape is mostly destroyed and the envelope is a gone in many regions, although we can find a small amount of membrane on the tops/bottoms of cells which is promising!
+
+This tells us that we can't simply send 5x upscaled XZ data through the network trained on normal XY slices... We need to artificially blur and downsample in order to better teach the network how to restore XZ (and YZ) slices. Let's try training a network to do exactly this in `t005`. 
+
+The network gets the loss down to .134, but it is not as good as in `t002` where we had 0.111 CE loss on the same data but without downsampling and upscaling the xs.
+
+loss: 0.1343 - acc: 0.8304 - val_loss: 0.1582 - val_acc: 0.8259
+
+*What sort of a price do we pay for the averaging?*
+
+Or does the averaging actually help up improve the metrics in `table001`? 
+
+new CE = 0.14754564981272042 on dense data if we take every 5th z slice for comparison with the dense labels. The class accuracy is (.208, .945, .890). So the accuracy for nuclei actually increases! 
+
+Now we compare unet (`t002` on left) vs ISONET unet (`t005` on right) in terms of general image quality (see `sc003`): 
+
+- `res024` shows XY slices. `t002` looks more cloudy and fluffy and has fewer meaningful gradients in nuclei probability. `t005` has clear orthogonal streaky artifacts, but it also shows us the top and bottom of cells in z including their red nuclear membranes, which elongates them in z (see bottom left). Some cell shapes look more complete in `t005`. Some membranes are more solid in `t002`.
+- `res025` shows the XZ slice view of the same data. On the left we've simply used cubic interpolation to upscale Z for comparison. Again we see entire pieces of nuclei missing on the left (top right), and the same structure of artifacts. Notably, many of the cells in `t002` are missing the nuclear membrane on their top and bottom, which can be partially restored using ISO but the signal is weak. 
+- `res026` is XZ view and shows (top left) a pair of nuclei with almost no envelope border, but that the ISO nevertheless manages to put a gap between them!
+
+Let's look at cell size distributions...
+
+
+
+
+*How can we improve this result?*
+
+1. Add XZ YZ slice annotations.
+2. Blur z before downsampling & upscaling
+3. Combine stacks without simply pixelwise average.
+4. 
+
+
+
+
+# Footnotes
+
+[^1]: But we have to make sure that we're not comparing a unet vs an *oversaturated* RF, i.e. one whose marginal learning rate is low. We expect that the RF was not oversaturated, because it was still updating it's prediction as I added pixels in the viewer.
+
+[^2]: Is this just because *more* is better than *fewer*? Is it just a fact about the efficiency of the dense annotation technique vs the sparse one? 
+
+[^3]: Note that we're testing against the full set of labeled data, not just the validation data! So this includes the training data for the dense unet. The dense unet validation cross entropy loss was val_loss: 0.1264. The sparse labels used in training the other models ALSO come from the same timepoint and z slices, so the comparison is not unfair.
+
+[^4]: I thought that RFs were supposed to be immune to overfitting?
