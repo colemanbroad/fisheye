@@ -27,51 +27,12 @@ img6  = img6.transpose((0,1,3,4,2))
 img6p = np.load('data_train/img006_Probabilities.npy')
 ys_predict = np.load('/Volumes/projects/project-broaddus/fisheye/data_predict/ys_predict.npy')
 ys_predict_1 = np.load('/Volumes/projects/project-broaddus/fisheye/data_predict/ys_predict_1.npy')
-ys_predict_0_dense = np.load('ys_predict_0_dense.npy')
+ys_predict_0_dense = np.load('training/t002/ys_predict_0_dense.npy')
 ys_predict_1_dense = np.load('/Volumes/projects/project-broaddus/fisheye/data_predict/ys_predict_1_dense.npy')
 lab6_sparse = np.load('data_train/labels006.npy')
 lab6_sparse = lab6_sparse[0,...,0]
 mask = lab6_sparse != 0
 lab6_dense = np.load('lab6_dense.npy')
-
-ys = lab6_dense.copy()
-# permute labels so as to be consistent with previous classifiers
-ys[ys>1] = 3
-ys[ys==1] = 2
-ys[ys==3] = 1
-ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
-
-xs = img6[0].copy()
-xs_downup_x = xs[:,:,::5]
-xs_downup_x = zoom(xs_downup_x, (1,1,5,1))
-xs_up_z = zoom(xs, (5,1,1,1))
-
-
-def compare_all():
-  stack1 = np.concatenate((img6p[1], ys_predict_1, ys_predict_1_dense), axis=2)
-  return view.ImshowStack(stack1, colorchan=True)
-iss = compare_all()
-
-# img6p = img6p.transpose((0,1,4,2,3))
-# img6all = np.concatenate([img6,img6p], axis=2)
-lab6 = np.load('labels006.npy').transpose((0,1,2,3,4))
-
-names = ['RF (SPARSE)', 'NET (SPARSE)', 'NET (DENSE)']
-data  = [img6p[1], ys_predict_1, ys_predict_1_dense]
-plt.figure()
-for i in range(3):
-  img = data[i]
-  name = names[i]
-  potential = 1 - img[...,1] + img[...,0]
-  # hx = gaussian(21, 2.0)
-  # potential  = gputools.convolve_sep3(potential, hx, hx, hx)
-  potential  = lib.normalize_percentile_to01(potential, 0, 100)*2
-  hyp,nhl = seg2()
-  areas = np.array([n['area'] for n in nhl])
-  plt.plot(sorted(np.log2(areas)), label=name)
-plt.legend()
-
-# img6 = np.stack([img6[...,0], img6[...,1], img6[...,1]], axis=-1)
 
 def seg1():
   x  = img6p[1,...,1]
@@ -81,19 +42,6 @@ def seg1():
   nhl,hyp  = lib.two_var_thresh(x, c1=0.4, c2=0.9)
   return nhl,hyp
 nhl,hyp = seg1()
-
-def mkpoints():
-  pointanno = pandas.read_csv("~/Desktop/Projects/fisheye/anno/point_anno.csv", header=0, sep=' ')
-  points = pointanno[['X', 'Y', 'Slice']]
-  points.X *= 10
-  points.X = np.ceil(points.X)
-  points.Y *= 10
-  points.Y = np.ceil(points.Y)
-  points = points.as_matrix().astype(np.int)
-  points = points[:,[2,1,0]]
-  points[:,0] -= 1 # fix stupid 1-based indexing
-  return points
-points = mkpoints()
 
 def seg2():
   # potential = 1 - img6p[1,...,1] + img6p[1,...,0]
@@ -137,7 +85,7 @@ def try_many_thresh_seg():
     compute(i)
 try_many_thresh_seg()
 
-def sizedist(hyp):
+def select_objects(hyp):
   labels, sizes = np.unique(hyp, return_counts=True)  
   inds = np.argsort(sizes)
   sizes = sizes[inds]
@@ -156,8 +104,8 @@ def sizedist(hyp):
   # w.glWidget.dataModel[0][...] = img6[1,...,1].astype('float')
   # w.glWidget.dataModel[0][mask] *= 5.0
   # w.glWidget.dataPosChanged(0)
-# sizedist(hyp)
-inds = sizedist(lab6_nuc_labeled)
+  # select_objects(hyp)
+inds = select_objects(lab6_nuc_labeled)
 
 for i in range(lab6_nuc_labeled.shape[0]):
   img = lab6_nuc_labeled[i]
@@ -165,7 +113,6 @@ for i in range(lab6_nuc_labeled.shape[0]):
   memid = ind[cts.argmax()]
   img[img==memid] = 1
   
-
 
 def curate():
   pp = 140
@@ -236,20 +183,6 @@ def onclick(event):
     w.glWidget.dataPosChanged(0)
 iss.fig.canvas.mpl_connect('button_press_event', onclick)
 
-newcents = []
-def onclick_centerpoints(event):
-  xi, yi = int(event.xdata + 0.5), int(event.ydata + 0.5)
-  zi = iss.idx[0]
-  print('button=%d, x=%d, y=%d, xdata=%f, ydata=%f' %
-      (event.button, event.x, event.y, event.xdata, event.ydata))
-  print(zi, yi, xi)
-  if event.key=='C':
-    print('added! ', event.key)
-    newcents.append([zi,yi,xi])
-cid = iss.fig.canvas.mpl_connect('button_press_event', onclick_centerpoints)
-
-iss.fig.canvas.mpl_disconnect()
-
 
 #### Fix the ground truth by removing the large blocks from the BG
 
@@ -275,20 +208,6 @@ def labnab1():
     lab[lab==memlabel] = 0
     lab[lab==bglabel] = 1
   return lab_full
-
-def remove_labels_at_pts(pts, img):
-  for pt in pts:
-    z,y,x = pt
-    l = img[z,y,x]
-    mask = img[z]==l
-    img[z][mask] = 1
-
-newcents = [[0, 372, 369],
-             [1, 372, 369],
-             [2, 369, 207],
-             [7, 369, 207],
-             [8, 48, 345],
-             [8, 51, 395]]
 
 labfull = labnab1()
 remove_labels_at_pts(newcents, labfull)
