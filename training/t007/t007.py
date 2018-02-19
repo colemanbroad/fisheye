@@ -116,33 +116,34 @@ history = net.fit(x=xs_train,
 
 net.save_weights(name + 'w002.h5')
 
-
-net.load_weights(name + 'w001.h5')
 xs = np.load('data_train/img6_t0_zup.npy')
-xs = np.load('data_train/img006.tif')
+# xs = np.load('data_train/img006.tif')
 
-xs_xz = xs.copy().transpose((1,0,2,3))
-xsmean = xs_xz.mean((1,2), keepdims=True)
-xs_xz = xs_xz / xsmean
-ys_xz = net.predict(xs_xz)
-ys_xz = ys_xz.transpose((1,0,2,3))
+for i in range(2,11):
+  net.load_weights(name + 'w001.h5')
+  xs = img6[i]
+  xs = zoom(xs, (356/71, 1, 1, 1))
+  xs_xz = xs.copy().transpose((1,0,2,3))
+  xsmean = xs_xz.mean((1,2), keepdims=True)
+  xs_xz = xs_xz / xsmean
+  ys_xz = net.predict(xs_xz)
+  ys_xz = ys_xz.transpose((1,0,2,3))
 
-np.save(name + 'ys_xz.npy', ys_xz)
+  xs_zy = xs.copy().transpose((2,1,0,3))
+  xsmean = xs_zy.mean((1,2), keepdims=True)
+  xs_zy = xs_zy / xsmean
+  ys_zy = net.predict(xs_zy)
+  ys_zy = ys_zy.transpose((2,1,0,3))
 
-xs_zy = xs.copy().transpose((2,1,0,3))
-xsmean = xs_zy.mean((1,2), keepdims=True)
-xs_zy = xs_zy / xsmean
-ys_zy = net.predict(xs_zy)
-ys_zy = ys_zy.transpose((2,1,0,3))
+  net.load_weights('training/t002/unet_model_weights_checkpoint.h5')
 
-net.load_weights('training/t002/unet_model_weights_checkpoint.h5')
+  xs_xy = xs.copy()
+  xsmean = xs_xy.mean((1,2), keepdims=True)
+  xs_xy = xs_xy / xsmean
+  ys_xy = net.predict(xs_xy)
 
-xs_xy = xs.copy()
-xsmean = xs_xy.mean((1,2), keepdims=True)
-xs_xy = xs_xy / xsmean
-ys_xy = net.predict(xs_xy)
-
-ys_avgd = np.stack([ys_xy, ys_xz, ys_zy], axis=0).mean(0)
-np.save(name + 'ys_avgd_t0.npy', ys_avgd)
+  ys_avgd = np.stack([ys_xy, ys_xz, ys_zy], axis=0).mean(0)
+  np.save(name + 'ys_avgd_t{}.npy'.format(i), ys_avgd)
+  np.save(name + 'img6_t{}.npy'.format(i), xs)
 
 

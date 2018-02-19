@@ -1,4 +1,5 @@
 import numpy as np
+import pandas
 
 def autocorr(x):
     result = np.correlate(x, x, mode='full')
@@ -23,3 +24,14 @@ def mkpoints():
   points = points[:,[2,1,0]]
   points[:,0] -= 1 # fix stupid 1-based indexing
   return points
+
+def highlight_segmentation_borders(img, hyp):
+  # hyp2 = lib.remove_nucs_hyp(nhl[:-2], hyp)
+  # iss = view.ImshowStack(hyp2)
+  # return iss
+  # iss = view.ImshowStack([img, hyp2])
+  # mask = lib.mask_nhl(nhl[-1], hyp)
+  # mask = hyp==nhl[-1]['label']
+  borders = voronoi.lab2binary_neibs3d(hyp)
+  img[borders<6] = img.max() + hyp2[borders<6]/hyp2.max()*img.max()
+  return img

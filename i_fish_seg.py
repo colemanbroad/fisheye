@@ -125,22 +125,6 @@ def curate():
   return w, anno
 w, anno = curate()
 
-def show_nhl_borders():
-  # ss = lib.nuc2slices(nhl[-1], 0)
-  img = img6[1,...,0].copy()
-  hyp2 = lib.remove_nucs_hyp(nhl[:-2], hyp)
-  # iss = view.ImshowStack(hyp2)
-  # return iss
-  # iss = view.ImshowStack([img, hyp2])
-  # mask = lib.mask_nhl(nhl[-1], hyp)
-  # mask = hyp==nhl[-1]['label']
-  borders = voronoi.lab2binary_neibs3d(hyp2)
-  img[borders<6] = img.max() + hyp2[borders<6]/hyp2.max()*img.max()
-  iss = view.ImshowStack([img, borders])
-  # iss = view.imshowme(img.mean(0))
-  return iss
-iss = show_nhl_borders()
-
 def highlight():
   img = img6[1,...,1].copy().astype('float')
   img[hyp==nhl[-1]['label']] *= 3.5
