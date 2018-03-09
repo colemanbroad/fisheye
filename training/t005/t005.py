@@ -83,7 +83,9 @@ history = net.fit(x=xs_train,
                   validation_data=(xs_vali, ys_vali))
 
 
-xs = img6[0].copy()
+net.load_weights('training/t005/unet_model_weights_checkpoint.h5')
+
+xs = img6[1].copy()
 xs = zoom(xs, (356/71, 1, 1, 1))
 
 xs_xz = xs.copy().transpose((1,0,2,3))
@@ -98,7 +100,7 @@ xs_zy = xs_zy / xsmean
 ys_zy = net.predict(xs_zy)
 ys_zy = ys_zy.transpose((2,1,0,3))
 
-net.load_weights('training/t003/unet_model_weights_checkpoint.h5')
+net.load_weights('training/t002/unet_model_weights_checkpoint.h5')
 
 xs_xy = xs.copy()
 xsmean = xs_xy.mean((1,2), keepdims=True)
@@ -106,6 +108,6 @@ xs_xy = xs_xy / xsmean
 ys_xy = net.predict(xs_xy)
 
 ys_avgd = np.stack([ys_xy, ys_xz, ys_zy], axis=0).mean(0)
-np.save('ys_avgd.npy', ys_avgd)
+np.save('training/t005/ys_avgd_t1.npy', ys_avgd)
 
 
