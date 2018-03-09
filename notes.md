@@ -19,6 +19,10 @@
 `img6.tif` from 
     `20_12_17_multiview H2B_RFP&BFP_Lap2bGFP_fish6_Multiview_RIF_Subset.czi`
     XYCZT. nuclear envelope and nuclear volume markers. Confocal w 5min time res. 400x400 crop from x,y = 600,900 (or 600,950?) Saving to tif reshapes to TZCYX.
+`img6_t0_zup.npy` is img6, but only the first timepoint and with the z axis cubically interpolated to scale the axis by a factor of ≈5.
+`fly000.tif` is `/Volumes/myersspimdata/Robert/2018-01-18-16-30-25-11-Robert_CalibZAP_Wfixed/processed/tif/000307.raw.tif`
+    single fly time point (mid gastrulation) from Xwing with 5x1 anisotropy, blurry nuclei, double nuclei from fusion bugs, etc.
+`fly001.tif` is a cubic upscaled `fly000`.
 
 # ilp files
 
@@ -248,7 +252,7 @@ Easy peasy.
 
 Using the new, densely labeled training data we can re-attempt semantic segmentation... We're starting off from the previous best unet weights, `t001`.
 
-The results are clear. The dense labeling is by far the best one. Even though we've only labeled a mere 10 z slices! The membrane fits nicely to the edge of the nuclei! Just like we demonstrated in our labelings... The only difference between the nets was the training data. NO difference in network parameters! See `results/res017.png` and `t002`.
+The results are clear. The dense labeling is by far the best one. Even though we've only labeled a mere 10 z slices! The membrane fits nicely to the edge of the nuclei! Just like we demonstrated in our labelings... The only difference between the nets was the training data. NO difference in network parameters! See `results/res017.png` and `t002`. Is the mismatch between nuclear edge and envelope label the result of chromatic aberration? Are we correcting CA with dense net?
 
 This is a large improvement over the sparse annotations and should improve the segmentations. Let's look at cell size distribution using watershed and potentials from the three different pixelwise classifiers... In `res018.png` we can see how the size distribution improves dramatically as we go from RF to NET and continues to improve if we replace the sparse labels with dense ones. This plot allows us to say a few nice things.
 
@@ -273,7 +277,7 @@ These numbers are very interesting:
 
 # ISONET - style 3D pixelwise classification
 
-See `training/t003/t003.py`. The goal is to arrive at a better 3D pixelwise segmentation by applying the ISONET technique of restoring image quality in XY, YZ and XZ views independently, all from XY annotations. To make this work we need to 
+The goal is to arrive at a better 3D pixelwise segmentation by applying the ISONET technique of restoring image quality in XY, YZ and XZ views independently, all from XY annotations. To make this work we need to 
 
 1. blur the xy slices independently along the axis to be rescaled.
 2. downsample along that axis by taking every nth slice (n=5?). The XY slices should at this point look qualitatively like XZ or YZ slices of the data.
@@ -289,9 +293,11 @@ When predicting, feed XZ and YZ slices (indpendently) into the network for predi
 2. Upscale the stack cubically in z. Feed in the XZ and YZ slices into the ISONET network and the normal XY slices (but now 5x as many slices because of the interpolation!) into the normal network.
 3. Then at the end average all three stacks together!
 
-Actually, the simplest thing would just be to not even train another network! Just try predicting on the upscaled XZ and YZ stacks with the normal net and average them at the end. Maybe it will suck who knows.... Importantly, *training* in that case doesn't even need to use down-uped stacks!
+Actually, the simplest thing would just be to not even train another network! Just try predicting on the upscaled XZ and YZ stacks with the normal net and average them at the end. Maybe it will suck who knows.... Importantly, 
+*training* in that case doesn't even need to use down-uped stacks!
 
-Let's look at these results with our current net... See `training/t004/t004.py`. You can see from `res019` the the XZ view of a net predicting on normal XY slices shows that the envelope region is missing from the Top and Bottom of cells (z is vertical axis in this view). Compare this with the normal XY view of the same data in `res020`. This is also obvious from the 3D view, see `res022` (xy view) and `res023` (side view). This is a consequence of the anisotropy inherent in the training data and in our labeling scheme. We seek to remedy this anisotropy by allowing the net to predict on XZ and YZ views of the same data, hopefully restoring the Tops and Bottoms of our nuclear envelope. In `res021` we can see the result of predicting on transposed, XZ slices (vertical/horizontal are z/x). The cell shape is mostly destroyed and the envelope is a gone in many regions, although we can find a small amount of membrane on the tops/bottoms of cells which is promising!
+Let's look at these results with our current net... See `training/t004/t004.py`. You can see from `res019` the the XZ view of a net predicting on normal XY slices shows that the envelope region is missing from the Top and Bottom of cells (z is vertical axis in this view). Compare this with the normal XY view of the same data in `res020`. This is also obvious from the 3D view, see 
+`res022` (xy view) and `res023` (side view). This is a consequence of the anisotropy inherent in the training data and in our labeling scheme. We seek to remedy this anisotropy by allowing the net to predict on XZ and YZ views of the same data, hopefully restoring the Tops and Bottoms of our nuclear envelope. In `res021` we can see the result of predicting on transposed, XZ slices (vertical/horizontal are z/x). The cell shape is mostly destroyed and the envelope is a gone in many regions, although we can find a small amount of membrane on the tops/bottoms of cells which is promising!
 
 This tells us that we can't simply send 5x upscaled XZ data through the network trained on normal XY slices... We need to artificially blur and downsample in order to better teach the network how to restore XZ (and YZ) slices. Let's try training a network to do exactly this in `t005`. 
 
@@ -311,17 +317,122 @@ Now we compare unet (`t002` on left) vs ISONET unet (`t005` on right) in terms o
 - `res025` shows the XZ slice view of the same data. On the left we've simply used cubic interpolation to upscale Z for comparison. Again we see entire pieces of nuclei missing on the left (top right), and the same structure of artifacts. Notably, many of the cells in `t002` are missing the nuclear membrane on their top and bottom, which can be partially restored using ISO but the signal is weak. 
 - `res026` is XZ view and shows (top left) a pair of nuclei with almost no envelope border, but that the ISO nevertheless manages to put a gap between them!
 
-Let's look at cell size distributions...
+Let's look at cell size distributions... See `res029` and `sc004`. It's clear that the nets all do better. The net trained on simple, dense XY data with no borderweights has the cleanest looking prob maps, and doesn't have any under-sized cells, while the net with border weights does the best job preventing undersegmentation of large cells but is very simliar to iso_avgd.
 
+*What if we don't use the seeds?*
 
+We get nonsense... unless we apply a σ=2px blur to the nuclear channel and retry. Then we see the ISO and border-weighted models perform well! See 
+`res030`.
 
-
-*How can we improve this result?*
+*How can we improve?*
 
 1. Add XZ YZ slice annotations.
 2. Blur z before downsampling & upscaling
-3. Combine stacks without simply pixelwise average.
-4. 
+3. Combine stacks without simply pixelwise average. Maybe even blur the stacks or combine nearby pixels [^5]. 
+4. We can add the pixel weight scheme that puts extra importance on membranes and boundaries.
+5. Change our labeling technique to include the dense nuclear envelope on the tops and bottoms of cells.
+6. Make the Unet 3D/4D by adding z and t ±1 to channels dimension.
+
+Let's begin with #4 by retraining `t002` but with extra boundary weights. See 
+`t006`. We have to pick the (arbitrary) expoential decay length! We chose 10. This is very important! OK the results look nasty. There is red envelope everywhere. We expect it to be over-represented, but it doesn't look nice. There are however some regions where the weighted network (right panel) does a better job of separating touching objects! See `res027` and `res028`. The loss is:
+
+loss: 0.1530 - acc: 0.8396 - val_loss: 0.1746 - val_acc: 0.8298
+
+We need perfect ground truth in this data so we can compare techniques accurately. Let's add annotations to XZ and YZ slices, then replace the ISONET technique with simple upscaling and prediction from the new annotations.
+
+Let's make a new workflow `sc005` for cleaning up the hand-made labelings and network training data from annotated slices in 3D stacks.
+
+Now we can train a network for XZ slices and we can include the new boundary weights technique. See `t007`. Final stats:
+
+loss: 0.1565 - acc: 0.8272 - val_loss: 0.2531 - val_acc: 0.6874
+
+The qualitative differences between this run and ISONET results from `t005` are very slight. After averaging XY,YZ,XZ views the only consistent qualitative difference I find is the z-width of membranes in `t007` (right panel) is a little more thin, see `res031`, and this may be the result of the border weights.
+
+Note that this required 9 additional XZ slice annotations, which were used to train the new model. 
+
+- We could combine this new data with the artificial XZ data and retrain?
+- We could add YZ slice annotations
+- We could settle for what we have and try working on the post-processing / segmentation? Guassian fitting? Level-set approach? Multicut? Centerpoints?
+- Do we try to work on visualization?
+
+Let's rerun `t007` with both artificial and real XZ data and see if we can improve. We can. The numbers are now:
+
+loss: 0.1327 - acc: 0.8472 - val_loss: 0.1505 - val_acc: 0.8383
+
+which are better than `t005` `t006` or `t007`(XZ only). And we can see the improvement in `res032` where the network now knows to put membrane in between touching nuclei and not just background as in `t005` and the image is generally cleaner. The size distribution using watershed w manual seed points is very similar to `t005` and `t006` (`res033`). [^6] But without manual seeds (see `res034`) we find roughly 25 more cells in `t007` than in `t006` and 50 more than in `t005`! Note that `t007` (the brown curve) has the clearest sharp upturn in size at the end of the distribution. These are clear undersegmentations; fusing of already *large* nuclei. 
+
+- Can we make the data more clear by measuring surface area of cells and plotting it with volume simultaneously?
+- can we get a sense for segmentation quality by looking at boder-highlighted cells?
+
+After studying the segmentation borders from two_level_thresholding on (from left to right) the random forest, `t001` and `t007` it's amazing to see how similar they are in this view (`res035`, `res036`, `res037`). See `sc004`. 
+
+*How do we know which is correct?*
+
+We need dense Gt! Also, let's look at all the cells proposed by the various out in a grid...
+
+# visualizing and correcting results
+
+New script for interactive exploration. Interactive cell display and selection. `sc006`. Similar to `sc005`, but the purpose is analysis of a segmentation. Not curation of hand-drawn labels.
+
+Now we can easily select nuclei from scatterplots and highlight them inside of the stack or 3D viewer, making them either *brighter* or *darker* (to reveal dim background). This works as a substitute for calculating pixel borders in the stack as well.
+
+After removing the nuclei touching the image boundaries we get a nice separation into four distinct classes if we scatterplot (x = log2 size, y = avg brightness):
+
+1. majority of well segmented nuclei of similar size: `res038`
+2. undersegmented nuclei in a clump: `res039`
+    - note that the long axis of both undersegmentation is in the z-direction, just as it was for drosophila! This tells us 
+3. small, bright nuclei in metaphase, just after division: `res040`
+4. pieces of other cells that were oversegmented: `res041`
+
+*How do we fix the small number of over and under segmentation?*
+
+- Continue to add labels, especially in XZ or YZ, until it looks good!
+- Heuristic fixes during post processing
+- Change the way we build watershed potential
+- Predict distance to membrane?
+- Change Unet (instance, etc)
+
+# Analyze segmentation across time. Does our model generalize well?
+
+See `sc007`. All images have been bicubic upscaled. Now we want to see if the segmenations look reasonable for all times and judge whether the objects are trackable.
+
+By eye the probability maps look to be of consistent quality across time... 
+
+Todo:
+- plot size and brightness dist in time-adjacent pairs
+- separate hypotheses into the minimal number of disjoint sets s.t. cells within the same set share no borders. (essentially the graph coloring problem). Show borders around segments only one set at a time so the borders are unambiguous. Slide through the volume and mark centers of cells with bad borders, or fix borders directly. Repeat with next set.
+- view all cells in max projections flatly arranged in a grid. maybe with rotation?
+
+---
+
+The distribution of brightness vs size appears to shift.
+
+# Can we improve the classifier by adding Z and T information?
+
+Let's try this by adding nearby Z and T slices to the channels dimension in the model. Hopefully the model will figure out what to do with the new information!
+
+ALSO we should be augmenting our data in simple ways.
+
+Should we change the remaining structure of the network in any way? Do we need to add many more features to the next layer so we can absorb all the new information? 
+
+Let's try retraining the XY model `t002` with these features:
+- Augmentation
+    + 90 rotation
+    + Flips
+    + Noise
+    + Warp?
+- Boder Weights
+- Z & T slices added to channels
+- ~~Mauricio's new annotations???~~
+
+`t008` = `t006` + augmentation?
+
+loss: 0.1178 - acc: 0.8712 - val_loss: 0.1607 - val_acc: 0.8164
+
+
+
+
+
 
 
 
@@ -335,3 +446,6 @@ Let's look at cell size distributions...
 [^3]: Note that we're testing against the full set of labeled data, not just the validation data! So this includes the training data for the dense unet. The dense unet validation cross entropy loss was val_loss: 0.1264. The sparse labels used in training the other models ALSO come from the same timepoint and z slices, so the comparison is not unfair.
 
 [^4]: I thought that RFs were supposed to be immune to overfitting?
+
+[^5]: What about doing a max over channel 0 (nuc envelope) followed by averaging the remaining two channels and rescaling s.t. all three channels sum to one? This would give a preference to nuc envelope and help identify object boundaries.
+[^6]: We need a stronger test to distinguish segmentation quality. We need unseeded tests and manual, pixelwise GT! 
