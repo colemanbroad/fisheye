@@ -14,7 +14,6 @@ from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStoppin
 import unet
 
 
-
 name = "training/t007/"
 
 img6  = io.imread('data_train/img006.tif', plugin='tifffile')

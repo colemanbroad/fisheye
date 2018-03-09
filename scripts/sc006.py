@@ -23,7 +23,6 @@ from . import lib as lib_local
 
 from keras.utils import np_utils
 
-
 img6 = io.imread('data_train/img006.tif')
 img6 = img6.transpose((0,1,3,4,2))
 
@@ -55,13 +54,19 @@ xmom  = np.array([n['moments_img'][0,0,0]/n['area'] for n in nhl2])
 col = plt.scatter(np.log2(areas), xmom) #np.log2(xmom))
 selector = view.SelectFromCollection(plt.gca(), col)
 
-w = spimagine.volshow(img6[1,...,1], interpolation='nearest', stackUnits=[1.0, 1.0, 5.0])
+w = spimagine.volshow(img6[1,...,1], interpolation='nearest', stackUnits=[1.0, 1.0, 1.0])
+
+# img = img6[0]
+img_spim = img6[0,...,1]
+w = spimagine.volshow(img_spim, interpolation='nearest', stackUnits=[1.0, 1.0, 5.0])
 
 def update_selection(r):
-  img = img6[1,...,1].copy()
+  # img = img6[1,...,1].copy()
+  # img = w.glWidget.dataModel[]
+  img2 = img_spim.copy()
   mask = lib.mask_nhl(nhl[selector.ind], hyp)
-  img[mask] = img[mask]*r
-  lib.update_spim(w, 0, img)
+  img2[mask] = img2[mask]*r
+  lib.update_spim(w, 0, img2)
 
 iss = view.ImshowStack(img6[1,...,1].copy())
 
@@ -90,6 +95,13 @@ def onclick_centerpoints(event):
 cid = iss.fig.canvas.mpl_connect('button_press_event', onclick_centerpoints)
 
 # iss.fig.canvas.mpl_disconnect()
+
+
+
+
+
+
+
 
 for pt in newcents:
   z,y,x = pt

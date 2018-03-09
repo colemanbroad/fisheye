@@ -42,7 +42,6 @@ for i in range(lab.shape[0]):
   lab_semantic[i][m1[i]] = 0
   lab_semantic[i][mask] = 1
 
-
 newcents = []
 def onclick_centerpoints(event):
   xi, yi = int(event.xdata + 0.5), int(event.ydata + 0.5)

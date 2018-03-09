@@ -1,3 +1,4 @@
+import re
 import numpy as np
 import pandas
 
@@ -35,3 +36,12 @@ def highlight_segmentation_borders(img, hyp):
   borders = voronoi.lab2binary_neibs3d(hyp)
   img[borders<6] = img.max() + hyp2[borders<6]/hyp2.max()*img.max()
   return img
+
+def sorted_nicely( l ): 
+    """ Sort the given iterable in the way that humans expect.
+        taken from https://stackoverflow.com/questions/2669059/how-to-sort-alpha-numeric-set-in-python
+    """ 
+    import re
+    convert = lambda text: int(text) if text.isdigit() else text 
+    alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
+    return sorted(l, key = alphanum_key)

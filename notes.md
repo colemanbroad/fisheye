@@ -23,6 +23,8 @@
 `fly000.tif` is `/Volumes/myersspimdata/Robert/2018-01-18-16-30-25-11-Robert_CalibZAP_Wfixed/processed/tif/000307.raw.tif`
     single fly time point (mid gastrulation) from Xwing with 5x1 anisotropy, blurry nuclei, double nuclei from fusion bugs, etc.
 `fly001.tif` is a cubic upscaled `fly000`.
+`res042`, `res043` we see the cell membrane even during Meta/Ana - phase?
+
 
 # ilp files
 
@@ -277,7 +279,7 @@ These numbers are very interesting:
 
 # ISONET - style 3D pixelwise classification
 
-The goal is to arrive at a better 3D pixelwise segmentation by applying the ISONET technique of restoring image quality in XY, YZ and XZ views independently, all from XY annotations. To make this work we need to 
+See `training/t003/t003.py`. The goal is to arrive at a better 3D pixelwise segmentation by applying the ISONET technique of restoring image quality in XY, YZ and XZ views independently, all from XY annotations. To make this work we need to 
 
 1. blur the xy slices independently along the axis to be rescaled.
 2. downsample along that axis by taking every nth slice (n=5?). The XY slices should at this point look qualitatively like XZ or YZ slices of the data.

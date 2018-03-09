@@ -155,19 +155,6 @@ split_up_cell(newcents)
 
 iss = view.ImshowStack([img6[1,...,0].copy(), hyp, ys_predict_1[...,1]])
 
-def onclick(event):
-    xi, yi = int(event.xdata + 0.5), int(event.ydata + 0.5)
-    zi = iss.idx[1]
-    print('button=%d, x=%d, y=%d, xdata=%f, ydata=%f' % (event.button, event.x, event.y, event.xdata, event.ydata))
-    print(zi, yi, xi)
-    print(event.key)
-    # self.centerpoints.append([zi,yi,xi])
-    w.glWidget.dataModel[0][...] = img6[1,...,1].astype('float')
-    w.glWidget.dataModel[0][hyp==hyp[zi,yi,xi]] *= 1.8
-    w.glWidget.dataPosChanged(0)
-iss.fig.canvas.mpl_connect('button_press_event', onclick)
-
-
 #### Fix the ground truth by removing the large blocks from the BG
 
 def labnab1():
