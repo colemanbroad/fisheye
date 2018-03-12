@@ -20,9 +20,6 @@
     `20_12_17_multiview H2B_RFP&BFP_Lap2bGFP_fish6_Multiview_RIF_Subset.czi`
     XYCZT. nuclear envelope and nuclear volume markers. Confocal w 5min time res. 400x400 crop from x,y = 600,900 (or 600,950?) Saving to tif reshapes to TZCYX.
 `img6_t0_zup.npy` is img6, but only the first timepoint and with the z axis cubically interpolated to scale the axis by a factor of ≈5.
-`fly000.tif` is `/Volumes/myersspimdata/Robert/2018-01-18-16-30-25-11-Robert_CalibZAP_Wfixed/processed/tif/000307.raw.tif`
-    single fly time point (mid gastrulation) from Xwing with 5x1 anisotropy, blurry nuclei, double nuclei from fusion bugs, etc.
-`fly001.tif` is a cubic upscaled `fly000`.
 `res042`, `res043` we see the cell membrane even during Meta/Ana - phase?
 
 
@@ -386,6 +383,8 @@ After removing the nuclei touching the image boundaries we get a nice separation
 3. small, bright nuclei in metaphase, just after division: `res040`
 4. pieces of other cells that were oversegmented: `res041`
 
+And here's the update process in action: `res044`, `res045`.
+
 *How do we fix the small number of over and under segmentation?*
 
 - Continue to add labels, especially in XZ or YZ, until it looks good!
@@ -393,6 +392,8 @@ After removing the nuclei touching the image boundaries we get a nice separation
 - Change the way we build watershed potential
 - Predict distance to membrane?
 - Change Unet (instance, etc)
+
+
 
 # Analyze segmentation across time. Does our model generalize well?
 

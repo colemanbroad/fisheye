@@ -18,7 +18,8 @@ import spimagine
 
 from segtools import cell_view_lib as view
 from segtools import lib
-from segtools import seg_sasha
+from segtools import segtools_simple as ss
+from segtools import color
 from . import lib as lib_local
 
 from keras.utils import np_utils
@@ -44,19 +45,18 @@ potential = gputools.convolve_sep3(potential, hx, hx, hx)
 potential = lib.normalize_percentile_to01(potential, 0, 100)
 # nhl,hyp = watershed(potential, c1=0.5, c2=0.9)
 hyp = watershed(potential, label(potential<0.1)[0], mask=potential<0.5)
-nhl = lib.hyp2nhl(hyp)
+nhl = lib.hyp2nhl(hyp, img6[0,...,1])
 nhl = np.array(nhl)
 
 iss = view.ImshowStack([img6[1,...,1], potential, hyp])
 plt.figure()
-areas = np.array([n['area'] for n in nhl2])
-xmom  = np.array([n['moments_img'][0,0,0]/n['area'] for n in nhl2])
+areas = np.array([n['area'] for n in nhl])
+xmom  = np.array([n['moments_img'][0,0,0]/n['area'] for n in nhl])
 col = plt.scatter(np.log2(areas), xmom) #np.log2(xmom))
 selector = view.SelectFromCollection(plt.gca(), col)
 
 w = spimagine.volshow(img6[1,...,1], interpolation='nearest', stackUnits=[1.0, 1.0, 1.0])
 
-# img = img6[0]
 img_spim = img6[0,...,1]
 w = spimagine.volshow(img_spim, interpolation='nearest', stackUnits=[1.0, 1.0, 5.0])
 
@@ -79,7 +79,7 @@ def update_stack(r):
 img = img6[1,...,1].copy()
 cmap = {n['label'] : n['moments_img'][0,0,0]/n['area'] for n in nhl}
 cmap[0] = 1.0
-hyp_max,_ = seg_sasha.apply_scalar_mapping(hyp, cmap)
+hyp_max = color.apply_mapping(hyp, cmap)
 lib.update_spim(w, 0, img/hyp_max)
 
 newcents = []
