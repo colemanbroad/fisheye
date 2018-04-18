@@ -21,7 +21,8 @@
     XYCZT. nuclear envelope and nuclear volume markers. Confocal w 5min time res. 400x400 crop from x,y = 600,900 (or 600,950?) Saving to tif reshapes to TZCYX.
 `img6_t0_zup.npy` is img6, but only the first timepoint and with the z axis cubically interpolated to scale the axis by a factor of ≈5.
 `res042`, `res043` we see the cell membrane even during Meta/Ana - phase?
-
+`res000`: movie across time of original `img6` data. single slice z=60.
+    size in MB: gif: 27, tif:92, avi(jpeg): 7, png(one time point) 5
 
 # ilp files
 
