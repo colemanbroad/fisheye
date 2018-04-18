@@ -436,11 +436,6 @@ loss: 0.1178 - acc: 0.8712 - val_loss: 0.1607 - val_acc: 0.8164
 
 
 
-
-
-
-
-
 # Footnotes
 
 [^1]: But we have to make sure that we're not comparing a unet vs an *oversaturated* RF, i.e. one whose marginal learning rate is low. We expect that the RF was not oversaturated, because it was still updating it's prediction as I added pixels in the viewer.
