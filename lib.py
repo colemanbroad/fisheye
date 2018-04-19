@@ -45,3 +45,30 @@ def sorted_nicely( l ):
     convert = lambda text: int(text) if text.isdigit() else text 
     alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
     return sorted(l, key = alphanum_key)
+
+def getxyslice(iss):
+  x0,x1 = iss.fig.axes[0].get_xlim()
+  x0,x1 = int(x0), int(x1)
+  y1,y0 = iss.fig.axes[0].get_ylim() # y is inverted!
+  y0,y1 = int(y0), int(y1)
+  ss = [slice(None),] * iss.stack.ndim
+  ss[-2] = slice(y0,y1)
+  ss[-1] = slice(x0,x1)
+  return ss
+
+def fixlabels(imgWlab):
+  """
+  Interesting numpy trivia.
+  You can use a single slice on the left side of an assignment, but not a slice of a slice!
+  We have to break this into two separate assignments.
+  """
+  inds = imgWlab.max((3,4))[:,:,0]
+  x0 = imgWlab[inds>0]
+  x = x0[:,0]
+  x[x==0] = 0   # background
+  x[x==168] = 1 # nucleus
+  x[x==255] = 2 # nuclear membrane
+  x[x==198] = 3 # unknown
+  x[x==85] = 4  # divisions
+  x0[:,0] = x
+  return inds, x0
