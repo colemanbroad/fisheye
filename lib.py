@@ -65,10 +65,34 @@ def fixlabels(imgWlab):
   inds = imgWlab.max((3,4))[:,:,0]
   x0 = imgWlab[inds>0]
   x = x0[:,0]
-  x[x==0] = 0   # background
+  x[x==0] = 2   # background
+  x[x==255] = 0 # nuclear membrane
   x[x==168] = 1 # nucleus
-  x[x==255] = 2 # nuclear membrane
   x[x==198] = 3 # unknown
   x[x==85] = 4  # divisions
   x0[:,0] = x
   return inds, x0
+
+@DeprecationWarning
+def tilez(img, ncols=8, ds=1):
+    img = img[::ds,::ds,::ds]
+    nz = img.shape[0]
+    nrows,rem = divmod(nz,ncols)
+    if rem>0: nrows+=1
+    ny,nx = img.shape[1], img.shape[2]
+    print(nrows, nz,ny,nx)
+    if img.ndim==3:
+        res = np.zeros((nrows*ny, ncols*nx))
+    elif img.ndim==4:
+        res = np.zeros((nrows*ny, ncols*nx, img.shape[3]))
+    print(res.shape)
+    for i in range(nz):
+        r,c = divmod(i,ncols)
+        sy = slice(r*ny, (r+1)*ny)
+        sx = slice(c*nx, (c+1)*nx)
+        if img.ndim==3:
+            ss = [sy,sx]
+        elif img.ndim==4:
+            ss = [sy,sx,slice(None)]
+        res[ss] = img[i]
+    return res

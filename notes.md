@@ -436,6 +436,47 @@ loss: 0.1178 - acc: 0.8712 - val_loss: 0.1607 - val_acc: 0.8164
 
 
 
+# t009
+
+- Add new classes for "unknown" and "dividing".
+`res044` shows we're not able to learn very much yet. The loss plateaus at 0.226 :/
+- There was a bug! In how I worked with channels and reshaping, etc.
+- Fixed and now rerunning... loss is down at .2 by end of 2nd epoch. accuracy .79 by end of 2nd epoch. 35 sec / epoch. This is with only 3 classes though! at least things are back to working. moral of the story is be careful with your channel order!
+- Re-ran using the GPU instance given by jupyter and all of a sudder it's down to 1sec / epoch... wtf.
+
+# jupyter notebook
+
+We've finally got the notebook running smoothly. I can train on the cluster GPU from home and I can even display and check my work as I go! Here's the new way of visualizing things `res045`.
+First good model trained to:
+loss: 0.0918 - acc: 0.8782 - val_loss: 0.1321 - val_acc: 0.8376
+
+this is 3-class without augmentation.
+with 5-classes (4 + 1 ignore class) we get pixelwise predictions for divisons.
+This is very interesting, and despite the lack of labels we get reasonable predictions across many
+slices. The net picks up on the coliflour texture of the chromatin in metaphase and the small and round features. We plot the 100 slices with the highest maximum value for divison in `res046` and 
+`res047`.
+
+NOTE: having a class you ignore in the loss doesn't mean it's ignored in the accuracy calculation afterwards! This means we have to write our own accuracy function that know which pixels to ignore.
+
+Now with simple 8-fold flip and rotate we get...
+loss: 0.0692 - acc: 0.8620 - val_loss: 0.0806 - val_acc: 0.8482
+And most impressively, the top-rated divisons look very convincing! `res048` (top 64) `res049`.
+
+
+# good ideas
+
+For segmentation based on watershed we have a few options.
+U-net
+U-net w explicit boundary class
+U-net w explicit boundary class and distance to nearest boundary!
+
+Distance to boundary is common.
+Should we use that for seeds in watershed?
+But use the nuclei and boundary channels to define the watershed potential?
+
+
+
+
 # Footnotes
 
 [^1]: But we have to make sure that we're not comparing a unet vs an *oversaturated* RF, i.e. one whose marginal learning rate is low. We expect that the RF was not oversaturated, because it was still updating it's prediction as I added pixels in the viewer.

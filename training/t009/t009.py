@@ -13,44 +13,49 @@ from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStoppin
 
 import unet
 import warping
+import lib as ll
+
+def permz(p1,p2):
+  "permutation mapping p1 to p2 for use in numpy.transpose. elems must be unique."
+  assert len(p1)==len(p2)
+  perm = list(range(len(p1)))
+  for i,p in enumerate(p2):
+    perm[i] = p1.index(p)
+  return perm
+
 
 name = "training/t009/"
 
+img6 = imread('data/labels_lut.tif')
+inds, traindata = ll.fixlabels(img6)
 
-img6 = io.imread('data/labels_lut.tif')
+xs_xy = traindata[:,[1,2]].copy()
+ys_xy = traindata[:,0].copy()
 
-img6  = io.imread('data_train/img006.tif', plugin='tifffile')
-img6  = img6.transpose((0,1,3,4,2))
-labfull = np.load('data_train/lab6_dense.npy') # first 10 z slices of first time point
+xs = xs_xy.transpose(permz('zcyx','zyxc'))
+ys = ys_xy # already zyx, no c
 
-xs_xy = img6[0,:10].copy()
-ys_xy = labfull.copy()
+ys[ys==3] = 1
+ys[ys==4] = 1
 
-# permute labels so as to be consistent with previous classifiers
-ys_xy[ys_xy>1] = 3
-ys_xy[ys_xy==1] = 2
-ys_xy[ys_xy==3] = 1
+if False:
+  xs1 = np.flip(xs, axis=1)
+  xs2 = np.flip(xs, axis=2)
+  xs12 = np.flip(np.flip(xs, axis=1), axis=2)
+  xs = np.concatenate((xs,xs1,xs2,xs12), axis=0)
 
-xs = xs_xy
-ys = ys_xy
+  ys1 = np.flip(ys, axis=1)
+  ys2 = np.flip(ys, axis=2)
+  ys12 = np.flip(np.flip(ys, axis=1), axis=2)
+  ys = np.concatenate((ys,ys1,ys2,ys12), axis=0)
 
-xs1 = np.flip(xs, axis=1)
-xs2 = np.flip(xs, axis=2)
-xs12 = np.flip(np.flip(xs, axis=1), axis=2)
-# xsr = rotate(xs, randangle, reshape=False)
-xs = np.concatenate((xs,xs1,xs2,xs12), axis=0)
-
-ys1 = np.flip(ys, axis=1)
-ys2 = np.flip(ys, axis=2)
-ys12 = np.flip(np.flip(ys, axis=1), axis=2)
-# ysr = rotate(ys, randangle, reshape=False)
-ys = np.concatenate((ys,ys1,ys2,ys12), axis=0)
-
+n_classes = len(np.unique(ys))
 # classweights = (1-counts/counts.sum())/(len(counts)-1)
-classweights = [1/3, 1/3, 1/3]
+classweights = [1/n_classes,]*n_classes
 
 distimg = ys.copy()
-distimg[distimg>0] = 1
+distimg[distimg!=2] = 1
+distimg[distimg==2] = 0
 distimg = distance_transform_edt(distimg)
 distimg = np.exp(-distimg/10)
 
@@ -60,10 +65,13 @@ ysmean = ys.mean()
 ys = ys*distimg[...,np.newaxis]
 ys *= ysmean/ys.mean()
 
-a,b,c,d = xs.shape
+# split 400x400 into 100x100 patches
 
-xs = xs.reshape((-1,4,b//4,4,100,2)).transpose((0,1,3,2,4,5)).reshape((-1,b//4,100,2))
-ys = ys.reshape((-1,4,b//4,4,100,3)).transpose((0,1,3,2,4,5)).reshape((-1,b//4,100,3))
+nz,ny,nx,nc = xs.shape
+ny4,nx4 = ny//4, nx//4
+xs = xs.reshape((nz,4,ny4,4,nx4,nc)).transpose(permz("z1y2xc","z12yxc")).reshape((-1,ny4,nx4,nc))
+nz,ny,nx,nc = ys.shape
+ys = ys.reshape((nz,4,ny4,4,nx4,nc)).transpose(permz("z1y2xc","z12yxc")).reshape((-1,ny4,nx4,nc))
 
 # normalize
 xsmean = xs.mean((1,2), keepdims=True)
@@ -87,7 +95,7 @@ ys_vali  = ys[-n_vali:]
 
 net = unet.get_unet_n_pool(n_pool=2,
                             inputchan=2,
-                            n_classes=3,
+                            n_classes=n_classes,
                             n_convolutions_first_layer=32,
                             dropout_fraction=0.2)
 
