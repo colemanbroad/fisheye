@@ -1,6 +1,17 @@
 # import IPython
+import numpy as np
 import matplotlib.pyplot as plt
+import sys
+import os
+import shutil
+
 from math import ceil
+
+from tifffile import imread, imsave
+from scipy.ndimage import zoom, label, distance_transform_edt, rotate
+from scipy.signal import gaussian
+from scipy.ndimage.morphology import binary_dilation
+from skimage.morphology import watershed
 
 def set_cell_width(percent=100):
     assert 10 < percent <= 100
