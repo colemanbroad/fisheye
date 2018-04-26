@@ -38,13 +38,13 @@ def highlight_segmentation_borders(img, hyp):
   return img
 
 def sorted_nicely( l ): 
-    """ Sort the given iterable in the way that humans expect.
-        taken from https://stackoverflow.com/questions/2669059/how-to-sort-alpha-numeric-set-in-python
-    """ 
-    import re
-    convert = lambda text: int(text) if text.isdigit() else text 
-    alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
-    return sorted(l, key = alphanum_key)
+  """ Sort the given iterable in the way that humans expect.
+      taken from https://stackoverflow.com/questions/2669059/how-to-sort-alpha-numeric-set-in-python
+  """ 
+  import re
+  convert = lambda text: int(text) if text.isdigit() else text 
+  alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
+  return sorted(l, key = alphanum_key)
 
 def getxyslice(iss):
   x0,x1 = iss.fig.axes[0].get_xlim()
@@ -75,24 +75,24 @@ def fixlabels(imgWlab):
 
 @DeprecationWarning
 def tilez(img, ncols=8, ds=1):
-    img = img[::ds,::ds,::ds]
-    nz = img.shape[0]
-    nrows,rem = divmod(nz,ncols)
-    if rem>0: nrows+=1
-    ny,nx = img.shape[1], img.shape[2]
-    print(nrows, nz,ny,nx)
-    if img.ndim==3:
-        res = np.zeros((nrows*ny, ncols*nx))
-    elif img.ndim==4:
-        res = np.zeros((nrows*ny, ncols*nx, img.shape[3]))
-    print(res.shape)
-    for i in range(nz):
-        r,c = divmod(i,ncols)
-        sy = slice(r*ny, (r+1)*ny)
-        sx = slice(c*nx, (c+1)*nx)
-        if img.ndim==3:
-            ss = [sy,sx]
-        elif img.ndim==4:
-            ss = [sy,sx,slice(None)]
-        res[ss] = img[i]
-    return res
+  img = img[::ds,::ds,::ds]
+  nz = img.shape[0]
+  nrows,rem = divmod(nz,ncols)
+  if rem>0: nrows+=1
+  ny,nx = img.shape[1], img.shape[2]
+  print(nrows, nz,ny,nx)
+  if img.ndim==3:
+      res = np.zeros((nrows*ny, ncols*nx))
+  elif img.ndim==4:
+      res = np.zeros((nrows*ny, ncols*nx, img.shape[3]))
+  print(res.shape)
+  for i in range(nz):
+      r,c = divmod(i,ncols)
+      sy = slice(r*ny, (r+1)*ny)
+      sx = slice(c*nx, (c+1)*nx)
+      if img.ndim==3:
+          ss = [sy,sx]
+      elif img.ndim==4:
+          ss = [sy,sx,slice(None)]
+      res[ss] = img[i]
+  return res

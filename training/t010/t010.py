@@ -1,6 +1,7 @@
 import numpy as np
 import sys
 import os, shutil
+import json
 
 from tifffile import imread, imsave
 from scipy.ndimage import zoom, label, distance_transform_edt, rotate
@@ -15,67 +16,81 @@ import unet
 import warping
 import lib as ll
 
-def permz(p1,p2):
+def perm(arr,p1,p2):
   "permutation mapping p1 to p2 for use in numpy.transpose. elems must be unique."
   assert len(p1)==len(p2)
   perm = list(range(len(p1)))
   for i,p in enumerate(p2):
     perm[i] = p1.index(p)
-  return perm
+  return arr.transpose(perm)
 
+def ensure_exists(dir):
+  try:
+    os.makedirs(dir)
+  except FileExistsError as e:
+    print(e)
+  
+name = "training/t010/"
+ensure_exists(name)
 
-name = "training/t009/"
+img6 = imread('data/img006.tif')
+img6lut = imread('data/labels_lut.tif')
+img6_w_labs = np.concatenate([img6lut[:,:,[0]], img6], axis=2)
+inds, traindata = ll.fixlabels(img6_w_labs)
 
-img6 = imread('data/labels_lut.tif')
-inds, traindata = ll.fixlabels(img6)
-
+## arrange into xs and ys
 xs_xy = traindata[:,[1,2]].copy()
 ys_xy = traindata[:,0].copy()
+xs = perm(xs_xy,'zcyx','zyxc')
+ys = ys_xy
 
-xs = xs_xy.transpose(permz('zcyx','zyxc'))
-ys = ys_xy # already zyx, no c
+## Augmentation
+xs1 = np.flip(xs, axis=1)
+xs2 = np.flip(xs, axis=2)
+xs12 = np.flip(np.flip(xs, axis=1), axis=2)
+xs = np.concatenate((xs,xs1,xs2,xs12), axis=0)
+ys1 = np.flip(ys, axis=1)
+ys2 = np.flip(ys, axis=2)
+ys12 = np.flip(np.flip(ys, axis=1), axis=2)
+ys = np.concatenate((ys,ys1,ys2,ys12), axis=0)
 
-ys[ys==3] = 1
-ys[ys==4] = 1
-
-if False:
-  xs1 = np.flip(xs, axis=1)
-  xs2 = np.flip(xs, axis=2)
-  xs12 = np.flip(np.flip(xs, axis=1), axis=2)
-  xs = np.concatenate((xs,xs1,xs2,xs12), axis=0)
-
-  ys1 = np.flip(ys, axis=1)
-  ys2 = np.flip(ys, axis=2)
-  ys12 = np.flip(np.flip(ys, axis=1), axis=2)
-  ys = np.concatenate((ys,ys1,ys2,ys12), axis=0)
-
+# define classweights
 n_classes = len(np.unique(ys))
 # classweights = (1-counts/counts.sum())/(len(counts)-1)
 classweights = [1/n_classes,]*n_classes
 
-distimg = ys.copy()
-distimg[distimg!=2] = 1
-distimg[distimg==2] = 0
-distimg = distance_transform_edt(distimg)
-distimg = np.exp(-distimg/10)
-
-# distimg /= distimg.mean()
+# convert ys to categorical
 ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
-ysmean = ys.mean()
-ys = ys*distimg[...,np.newaxis]
-ys *= ysmean/ys.mean()
 
 # split 400x400 into 100x100 patches
-
 nz,ny,nx,nc = xs.shape
 ny4,nx4 = ny//4, nx//4
-xs = xs.reshape((nz,4,ny4,4,nx4,nc)).transpose(permz("z1y2xc","z12yxc")).reshape((-1,ny4,nx4,nc))
+xs = xs.reshape((nz,4,ny4,4,nx4,nc))
+xs = perm(xs,"z1y2xc","z12yxc")
+xs = xs.reshape((-1,ny4,nx4,nc))
 nz,ny,nx,nc = ys.shape
-ys = ys.reshape((nz,4,ny4,4,nx4,nc)).transpose(permz("z1y2xc","z12yxc")).reshape((-1,ny4,nx4,nc))
+ys = ys.reshape((nz,4,ny4,4,nx4,nc))
+ys = perm(ys,"z1y2xc","z12yxc")
+ys = ys.reshape((-1,ny4,nx4,nc))
+
+## Turn off the irrelevant class
+mask = ys[...,3]==1
+ys[mask] = 0
+
+## reweight border pixels
+a,b,c,d = ys.shape
+distimg = np.zeros((a,b,c), dtype=np.float16)
+mask = ys[...,2]==1
+distimg[~mask] = 1
+distimg = np.array([distance_transform_edt(d) for d in distimg])
+distimg = np.exp(-distimg/10)
+distimg = distimg/distimg.mean((1,2), keepdims=True)
+ys = ys*distimg[...,np.newaxis]
+
+print(ys.max((0,1,2)))
 
 # normalize
-xsmean = xs.mean((1,2), keepdims=True)
-xs = xs / xsmean
+xs = xs/xs.mean((1,2), keepdims=True)
 
 # shuffle
 inds = np.arange(xs.shape[0])
@@ -91,7 +106,6 @@ xs_train = xs[:-n_vali]
 ys_train = ys[:-n_vali]
 xs_vali  = xs[-n_vali:]
 ys_vali  = ys[-n_vali:]
-
 
 net = unet.get_unet_n_pool(n_pool=2,
                             inputchan=2,
@@ -119,5 +133,47 @@ history = net.fit(x=xs_train,
                   validation_data=(xs_vali, ys_vali))
 
 net.save_weights(name + 'w002.h5')
+json.dump(history.history, open(name + 'history.json', 'w'))
+
+## Predictions!
+
+%%time
+x = perm(img6,"tzcyx","tzyxc")
+a,b,c,d,e = x.shape
+x = x.reshape((a*b,c,d,e))
+x = x/x.mean((1,2), keepdims=True)
+x.shape
+img6pred = net.predict(x)
+img6pred = img6pred.reshape((a,b,c,d,n_classes))
+
+## why did this take five minutes?!?!? when on jupyter hub it took 10 secs...
+
+## find divisions
+from math import ceil
+x = img6pred[:,:,:,:]
+a,b,c,d,e = x.shape
+x = x.reshape((a,b,c,d,e))
+div = x[:,::6,...,4].sum((2,3))
+
+dc = np.sort(div.flat)[-20]
+tz = np.argwhere(div > dc)[:7]
+
+lst = list(range(x.shape[0]))
+x2 = x[:,::6]
+x2 = np.array([x2[timewindow(lst, n[0], 7), n[1]] for n in tz])
+a,b,c,d,e = x2.shape
+x2.shape
+x2 = perm(x2,'12yxc','1y2xc')
+a,b,c,d,e = x2.shape
+x2 = x2.reshape((a*b,c*d,e))
+np.save('qsave', x2[...,[4,1,2]])
+
+## more divisions
+x = img6pred[-2,...,4] #.max(1)
+np.save('qsave', x)
+
+
+
+
 
 

@@ -462,6 +462,70 @@ Now with simple 8-fold flip and rotate we get...
 loss: 0.0692 - acc: 0.8620 - val_loss: 0.0806 - val_acc: 0.8482
 And most impressively, the top-rated divisons look very convincing! `res048` (top 64) `res049`.
 
+We can volume render the division channel from timepoint 10 (2nd to last) and 
+clearly see one large, single cell in a metaphase state `res050`.
+
+# sc008 -- segmentation AND tracking
+
+Segmentations look reasonable, but tracking does not, according to most views.
+Let's select a subset of cells that look reasonable from each frame. save them as GT and try to track them.
+
+How can we tell what the problems are? 
+We can see the cell flow well in spimagine, but it's very difficult to see in any slice viewer.
+We can't see the tracking result well from any view so far.
+ideas:
+    light up a sparse subset of cells and follow them over time from above
+    center view on a single cell and follow it (Gene's favorite) from behind
+The grid of crops w max projection or middle slice. w highlighting? 
+
+We've added `anno000`. This is the visual annotation of 130 cell segments using spima.curate_nhl.
+The associated labeling comes from voronoi segmentation as defined in: `94a2198/sc008`.
+
+I need some additional features. Surface Area. And the disribution of that area over what it touches.
+
+
+# visuals
+
+3d view volume rendering of fluorescence images. single channel.
+3d view volume rendering of mod-colored label images.
+3d view volume rendering of fluorescence images w cell highlights
+3d view volume rendering individual cells.
+Stack view. single channel.
+Stack view. colored.
+Stack view w hand drawn overlay polygons.
+Plot data view.
+Plot data w hand drawn selections.
+grid of patches
+slice view with object boundaries highlighted / colored
+
+3d view volume rendering of crop
+    crop comes from nhl
+    clicks from stack view
+    clicks on objects in stack view
+
+
+
+# todo
+
+What is there left to do until the project is finished?
+
+The goal is to get segmentation and tracking working for the first time in the retina.
+It has been tried before, without luck.
+Using U-net, slice annotations, 3D watershed, division annotations, custom views we can solve the problem.
+
+Right now the segmentation works only poorly. It proposes 130 objects per image including
+    at least 4 oversegmented blobs with 5 or 6 cells per blob
+    at least 30 small objects that are not nuclei, but might be pieces of nuclei
+
+- [ ] Show that segmentation works. Take time to go over solution w curation tools until you have 1000 trajectories.
+But this doesn't show the comparative advantage of the new tech!
+Once we have the correct solution as GT, then we can show the comparative advantage?
+How do we show advantage of curation tools?
+    Timing?
+
+
+
+
 
 # good ideas
 

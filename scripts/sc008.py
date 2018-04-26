@@ -62,3 +62,18 @@ for i,p in enumerate(patches[:30]):
 res = qopen()
 plt.imshow(res)
 
+## lasso selector
+
+
+
+
+lasso = LassoSelector(iss.fig.gca(), onselect=onselect)
+vertices = []
+def onselect(verts):
+    vertices = verts
+    # path = Path(verts)
+    # self.ind = np.nonzero([path.contains_point(xy) for xy in self.xys])[0]
+    # self.fc[:, -1] = self.alpha_other
+    # self.fc[self.ind, -1] = 1
+    # self.collection.set_facecolors(self.fc)
+    # self.canvas.draw_idle()

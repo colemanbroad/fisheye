@@ -49,10 +49,11 @@ nhl = lib.hyp2nhl(hyp, img6[0,...,1])
 nhl = np.array(nhl)
 
 iss = view.ImshowStack([img6[1,...,1], potential, hyp])
+
 plt.figure()
-areas = np.array([n['area'] for n in nhl])
-xmom  = np.array([n['moments_img'][0,0,0]/n['area'] for n in nhl])
-col = plt.scatter(np.log2(areas), xmom) #np.log2(xmom))
+xs = np.array([np.log2(n['area']) for n in nhl])
+ys = np.array([n['moments_img'][0,0,0]/n['area'] for n in nhl])
+col = plt.scatter(xs,ys)
 selector = view.SelectFromCollection(plt.gca(), col)
 
 w = spimagine.volshow(img6[1,...,1], interpolation='nearest', stackUnits=[1.0, 1.0, 1.0])
@@ -71,10 +72,10 @@ def update_selection(r):
 iss = view.ImshowStack(img6[1,...,1].copy())
 
 def update_stack(r):
-  img = img6[1,...,1].copy()
-  mask = lib.mask_nhl(nhl[selector.ind], hyp)
+  img = img[2,:,1].copy()
+  mask = seglib.mask_nhl(nhl[selector.ind], hyp)
   img[mask] = img[mask]*r
-  iss.stack[0] = img
+  iss.stack[0,0] = img
 
 img = img6[1,...,1].copy()
 cmap = {n['label'] : n['moments_img'][0,0,0]/n['area'] for n in nhl}
