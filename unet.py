@@ -238,7 +238,7 @@ def batch_generator_patches_aug(X, Y,
         np.random.shuffle(inds)
         X = X[inds]
         Y = Y[inds]
-        while batchnum < batches_per_epoch:
+        while batchnum < steps_per_epoch:
             Xbatch, Ybatch = X[current_idx:current_idx + batch_size].copy(), Y[current_idx:current_idx + batch_size].copy()
             # io.imsave('X.tif', Xbatch, plugin='tifffile')
             # io.imsave('Y.tif', Ybatch, plugin='tifffile')
