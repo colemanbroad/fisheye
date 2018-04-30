@@ -1,5 +1,6 @@
 # import IPython
 import numpy as np
+import json
 
 import sys
 import os
@@ -31,3 +32,9 @@ def timewindow(lst, t, l):
 
 def qsave(x):
   np.save('qsave', x)
+
+def ensure_exists(dir):
+  try:
+    os.makedirs(dir)
+  except FileExistsError as e:
+    print(e)

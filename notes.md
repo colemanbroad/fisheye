@@ -463,7 +463,7 @@ loss: 0.0692 - acc: 0.8620 - val_loss: 0.0806 - val_acc: 0.8482
 And most impressively, the top-rated divisons look very convincing! `res048` (top 64) `res049`.
 
 We can volume render the division channel from timepoint 10 (2nd to last) and 
-clearly see one large, single cell in a metaphase state `res050`.
+clearly see one large, single cell in a metaphase state `res050`. While `res051` shows four divisions with time moving from left to right.
 
 # sc008 -- segmentation AND tracking
 
@@ -482,6 +482,46 @@ We've added `anno000`. This is the visual annotation of 130 cell segments using 
 The associated labeling comes from voronoi segmentation as defined in: `94a2198/sc008`.
 
 I need some additional features. Surface Area. And the disribution of that area over what it touches.
+
+
+# [problem] The segmentation is poor
+
+as shown in `anno000` the segmentation is half good.
+we can ignore this and fix it with manual correction?
+but the segmentation is bad enough where it prevents automated tracking
+we could try to improve automated tracking to add visual appearance?
+but we can probably fix the segmentation before that stage.
+*And the whole point of this work is to be able to segment densely packed nuclei!*
+there are oversegments and undersegments
+we can reduce oversegmentation by not using watershed
+we can reduce undersegmentation by identifying undersegmented groups and clustering
+any clustering technique works, including kmeans, SLIC, or GMM fitting if we know number of nuclei
+
+We're not properly using the boundary information.
+We are treating the boundary and the background the same by ignoring them both in pimg!
+We should prevent instances from extending into pixels if boundary class is 0.05 or greater!
+
+we don't have any full 3D cell pixelwise instance labelings!
+this prevents us from doing star-convex or Mask R-CNN instance seg
+it prevents us from *learning* any full 3D instance seg
+we could do 2D instance seg on pieces/slices of nuclei
+
+A separate problem with the segmentation is it proposes many cells at the border
+this is not a problem with the segmentation technique, but with the data!
+And it is not a *problem* with the data, but an unavoidable aspect
+we can just ignore this "problem" and recongnize that it messes up all our shape stats
+
+# [problem] i have two similar segmentations, but don't know which is better
+
+How do we compare segmentations in the absense of ground truth?
+I want a function that shows me all the places where two proposed segmentations *disagree*.
+A matching function should do this.
+Match up all the proposed segments that are sufficiently similar, then show me the remaining ones.
+Very rigid matchings requiring pixel-perfect agreement or flexible matchings could be used.
+This function will be similar to displaying disagreement between proposed seg and GT seg.
+*Is the boundary-coloring function from stardist paper enough already?*
+No, it should be symmetric between the two segs, and it should highlight disagreement.
+*Should it crop out disagreements or just highlight them in the full image?*
 
 
 # visuals

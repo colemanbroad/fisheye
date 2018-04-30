@@ -1,12 +1,4 @@
-import numpy as np
-import sys
-import os, shutil
-import json
-
-from tifffile import imread, imsave
-from scipy.ndimage import zoom, label, distance_transform_edt, rotate
-from scipy.signal import gaussian
-from scipy.ndimage.morphology import binary_dilation
+from ipython_remote_defaults import *
 
 from keras.optimizers import Adam, SGD
 from keras.utils import np_utils
@@ -15,20 +7,6 @@ from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStoppin
 import unet
 import warping
 import lib as ll
-
-def perm(arr,p1,p2):
-  "permutation mapping p1 to p2 for use in numpy.transpose. elems must be unique."
-  assert len(p1)==len(p2)
-  perm = list(range(len(p1)))
-  for i,p in enumerate(p2):
-    perm[i] = p1.index(p)
-  return arr.transpose(perm)
-
-def ensure_exists(dir):
-  try:
-    os.makedirs(dir)
-  except FileExistsError as e:
-    print(e)
   
 name = "training/t010/"
 ensure_exists(name)

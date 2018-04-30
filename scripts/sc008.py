@@ -2,44 +2,75 @@ from ipython_local_defaults import *
 import lib as ll
 
 img = imread('data/img006.tif')
-pimg = np.load('img61.npy')
+pimg = np.load('training/t009/img6pred_5class_aug.npy')
 
 print(img.shape)
-img = img.transpose((0,3,1,2))
 
-hx = gaussian(9, 1.0)
-def f(p):
-	p = gputools.convolve_sep3(p, hx, hx, hx)
-	p = p/p.max()
-	return p
-pimg_blur = np.array([f(p) for p in pimg])
+# hx = gaussian(9, 1.0)
+# def f(p):
+# 	p = gputools.convolve_sep3(p, hx, hx, hx)
+# 	p = p/p.max()
+# 	return p
+# pimg_blur = np.array([f(p) for p in pimg])
+
 
 
 ## just one blob
 lab = label(pimg_blur>0.8)[0]
 ## reasonable start
-lab = np.array([label(x>0.8)[0] for x in pimg_blur])
+lab = np.array([label(x>0.5)[0] for x in pimg_blur])
 ## some gain over the above. 1min 30sec. if we blur first.
-lab = np.array([watershed(1-x,label(x>0.9)[0], mask = x>0.5) for x in pimg_blur])
+def f(x):
+	x1 = x[...,1] # nuclei
+	x2 = x[...,2] # borders
+	mask = (x1 > 0.5) #& (x2 < 0.1)
+	res = watershed(1-x1,label(x1>0.9)[0], mask = mask)
+	return res
+lab = np.array([f(x) for x in pimg[2:4]])
+
+## focus on trackable timepoints
+
+img2 = img[2:,:,1].copy()
+lab2 = lab[2:].copy()
 
 ## now let's try tracking cells using the 2nd definition of lab
-sys.path.insert(0, '../')
-from planaria_tracking import lib as tracklib
-lab2 = lab[2:].copy()
-nhls = tracklib.labs2nhls(lab2, img[2:,:,1], simple=False)
-plotting.plot_nhls(nhls, x=lambda n:n['moments_img'][0,0,0]/n['area'])
+
+nhls = tracklib.labs2nhls(lab2, img2, simple=False)
 tr = tracklib.nhls2tracking(nhls)
 cm2 = tracklib.lineagelabelmap(tr.tb, tr.tv)
+lab_res = tracklib.recolor_every_frame(lab2, cm2)
 lab_res_rgb = tracklib.recolor_every_frame(lab2, tr.cm)
+plotting.plot_nhls(nhls, x=lambda n:n['moments_img'][0,0,0]/n['area'])
+
+## analysis of nhl
+
+nhl = np.array(nhls[0])
+
+w = spimagine.volshow(img2, stackUnits=[1,1,4])
+
+## plot with selector
 
 plt.figure()
-# xs = np.array([np.log2(n['area']) for n in nhl])
-xs = np.array([n['coords'][0] for n in nhl])
+nhl = nhl2
+xs = np.array([n['area'] for n in nhl])
+xs = np.array([np.log2(n['area']) for n in nhl])
+# xs = np.array([n['coords'][0] for n in nhl])
 # ys = np.array([n['moments_img'][0,0,0]/n['area'] for n in nhl])
-ys = np.array([n['coords'][1] for n in nhl])
-col = plt.scatter(xs,ys)
-selector = view.SelectFromCollection(plt.gca(), col)
+# ys = np.array([n['coords'][1] for n in nhl])
+ys = np.array([n['surf'] for n in nhl])
+ys = np.array([np.log2(n['surf']) for n in nhl])
+col2 = plt.scatter(xs,ys)
+selector1 = view.SelectFromCollection(ax, col)
 
+## pairplot all the features for a single nhl
+
+dat = seglib.nhl2dataframe(nhl, vecs=False, moments=False)
+sns.pairplot(dat[['area','surf','dims0','dims1','dims2']]) #,'min_intensity','max_intensity']])
+
+## figure out neighbor stats for each object
+
+neibs = voronoi.label_neighbors(lab2[0])
+tot = neibs.sum(0) + neibs.sum(1)
 
 ## try to plot each nucleus in a grid
 
@@ -58,14 +89,10 @@ for i,p in enumerate(patches[:30]):
 
 ## we have masks for every object
 
-
 res = qopen()
 plt.imshow(res)
 
 ## lasso selector
-
-
-
 
 lasso = LassoSelector(iss.fig.gca(), onselect=onselect)
 vertices = []
