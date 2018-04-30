@@ -7,6 +7,7 @@ from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStoppin
 import unet
 import warping
 import lib as ll
+import augmentation
   
 name = "training/t010/"
 ensure_exists(name)
@@ -21,16 +22,6 @@ xs_xy = traindata[:,[1,2]].copy()
 ys_xy = traindata[:,0].copy()
 xs = perm(xs_xy,'zcyx','zyxc')
 ys = ys_xy
-
-## Augmentation
-xs1 = np.flip(xs, axis=1)
-xs2 = np.flip(xs, axis=2)
-xs12 = np.flip(np.flip(xs, axis=1), axis=2)
-xs = np.concatenate((xs,xs1,xs2,xs12), axis=0)
-ys1 = np.flip(ys, axis=1)
-ys2 = np.flip(ys, axis=2)
-ys12 = np.flip(np.flip(ys, axis=1), axis=2)
-ys = np.concatenate((ys,ys1,ys2,ys12), axis=0)
 
 # define classweights
 n_classes = len(np.unique(ys))
@@ -102,9 +93,31 @@ earlystopper = EarlyStopping(patience=30, verbose=0)
 reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
 callbacks = [checkpointer, earlystopper, reduce_lr]
 
-history = net.fit(x=xs_train,
-                  y=ys_train,
-                  batch_size=3,
+def random_augmentation_xy(xpatch, ypatch):
+  if random.random()<0.5:
+      xpatch = np.flip(xpatch, axis=1)
+      ypatch = np.flip(ypatch, axis=1)
+  if random.random()<0.5:
+      xpatch = np.flip(xpatch, axis=0)
+      ypatch = np.flip(ypatch, axis=0)
+  if random.random()<0.5:
+      delta = np.random.normal(loc=0, scale=15, size=(2,3,3))
+      xpatch,_,_ = augmentation.unet_warp_channels(xpatch, delta=delta)
+      ypatch,_,_ = augmentation.unet_warp_channels(ypatch, delta=delta)
+  if random.random()<0.5:
+      randangle = (random.random()-0.5)*60 # even dist between ± 30
+      xpatch  = rotate(xpatch, randangle, reshape=False, mode='reflect')
+      ypatch  = rotate(ypatch, randangle, reshape=False, mode='reflect')
+  return xpatch, ypatch
+
+bgen = unet.batch_generator_patches_aug(xs_train, ys_train, 
+                                  steps_per_epoch=100, 
+                                  batch_size=3, 
+                                  augment_and_norm=random_augmentation_xy)
+
+
+history = net.fit_generator(bgen,
+                  steps_per_epoch=100,
                   epochs=60,
                   verbose=1,
                   callbacks=callbacks,
@@ -115,7 +128,6 @@ json.dump(history.history, open(name + 'history.json', 'w'))
 
 ## Predictions!
 
-%%time
 x = perm(img6,"tzcyx","tzyxc")
 a,b,c,d,e = x.shape
 x = x.reshape((a*b,c,d,e))
@@ -124,7 +136,9 @@ x.shape
 img6pred = net.predict(x)
 img6pred = img6pred.reshape((a,b,c,d,n_classes))
 
-## why did this take five minutes?!?!? when on jupyter hub it took 10 secs...
+
+
+
 
 ## find divisions
 from math import ceil

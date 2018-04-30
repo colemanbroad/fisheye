@@ -41,8 +41,8 @@ def unet_warp_channels(img, delta):
         stack[:,:,i] = unet_warp_orig(img[:,:,i], delta)[0]
     return stack
 
+@DeprecationWarning
 def warp_all_possible(xs, ys):
-# def randomly_augment_patches(patch, ypatch, noise, flipLR, warping_size, rotate_angle_max):
     """
     flip, rotate, and warp all ways
     """
@@ -124,6 +124,7 @@ def warp_gaussian(img, stdev=2, w=10):
     res = tform.warp(img, newcoords, order=3)
     return res
 
+@DeprecationWarning
 def warp_label_img(lab, warp_scale = 20, w = 4):
     """
     lab is a label image with 0-valued membrane
@@ -147,6 +148,7 @@ def warp_label_img(lab, warp_scale = 20, w = 4):
     warped_relabeled = label(membrane_seg, structure=structure)[0]
     return warped_relabeled
 
+@DeprecationWarning
 def randomly_augment_patches(patch, ypatch, noise, flipLR, warping_size, rotate_angle_max):
     """
     flip, rotate, and warp with some probability
@@ -191,7 +193,6 @@ def explore_warps(img):
     ss = [2]*30
     ws = [10]
     big = np.zeros((len(ss), len(ws)) + img.shape)
-
     x,y = 0,0
     for s in ss:
         y=0
@@ -225,9 +226,4 @@ def explore_warps_multisize(img):
             y+=b
         x+=a
     return big
-
-if __name__=='__main__':
-    img500 = io.imread('img500.tif')
-    plot_vector_field(img500)
-
 

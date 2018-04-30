@@ -224,3 +224,40 @@ def batch_generator_patches(X, Y, train_params, verbose=False):
             batchnum += 1
             yield Xbatch, Ybatch
 
+def batch_generator_patches_aug(X, Y, 
+                                steps_per_epoch=100,
+                                batch_size=4,
+                                augment_and_norm=lambda x,y:(x,y),
+                                verbose=False):
+    epoch = 0
+    tp = train_params
+    while (True):
+        epoch += 1
+        current_idx = 0
+        batchnum = 0
+        inds = np.arange(X.shape[0])
+        np.random.shuffle(inds)
+        X = X[inds]
+        Y = Y[inds]
+        while batchnum < batches_per_epoch:
+            Xbatch, Ybatch = X[current_idx:current_idx + batch_size].copy(), Y[current_idx:current_idx + batch_size].copy()
+            # io.imsave('X.tif', Xbatch, plugin='tifffile')
+            # io.imsave('Y.tif', Ybatch, plugin='tifffile')
+
+            current_idx += batch_size
+
+            for i in range(Xbatch.shape[0]):
+                x = Xbatch[i]
+                y = Ybatch[i]
+                x,y = augment_and_norm(x, y)
+                Xbatch[i] = x
+                Ybatch[i] = y
+
+            # io.imsave('Xauged.tif', Xbatch.astype('float32'), plugin='tifffile')
+            # io.imsave('Yauged.tif', Ybatch.astype('float32'), plugin='tifffile')
+
+            # print('xshape', Xbatch.shape)
+            # print('yshape', Ybatch.shape)
+
+            batchnum += 1
+            yield Xbatch, Ybatch

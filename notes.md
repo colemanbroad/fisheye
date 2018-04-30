@@ -523,7 +523,6 @@ This function will be similar to displaying disagreement between proposed seg an
 No, it should be symmetric between the two segs, and it should highlight disagreement.
 *Should it crop out disagreements or just highlight them in the full image?*
 
-
 # visuals
 
 3d view volume rendering of fluorescence images. single channel.
