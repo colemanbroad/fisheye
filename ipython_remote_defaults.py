@@ -14,7 +14,7 @@ from scipy.signal import gaussian
 from scipy.ndimage.morphology import binary_dilation
 from skimage.morphology import watershed
 
-import gputools
+# import gputools
 
 def perm(arr,p1,p2):
   "permutation mapping p1 to p2 for use in numpy.transpose. elems must be unique."
