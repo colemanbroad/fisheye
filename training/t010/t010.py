@@ -5,7 +5,6 @@ from keras.utils import np_utils
 from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStopping, TensorBoard, ReduceLROnPlateau
 
 import unet
-import warping
 import lib as ll
 import augmentation
   
@@ -101,7 +100,7 @@ def random_augmentation_xy(xpatch, ypatch):
       xpatch = np.flip(xpatch, axis=0)
       ypatch = np.flip(ypatch, axis=0)
   if random.random()<0.5:
-      delta = np.random.normal(loc=0, scale=15, size=(2,3,3))
+      delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
       xpatch,_,_ = augmentation.unet_warp_channels(xpatch, delta=delta)
       ypatch,_,_ = augmentation.unet_warp_channels(ypatch, delta=delta)
   if random.random()<0.5:
@@ -114,7 +113,6 @@ bgen = unet.batch_generator_patches_aug(xs_train, ys_train,
                                   steps_per_epoch=100, 
                                   batch_size=3, 
                                   augment_and_norm=random_augmentation_xy)
-
 
 history = net.fit_generator(bgen,
                   steps_per_epoch=100,

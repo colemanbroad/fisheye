@@ -230,7 +230,6 @@ def batch_generator_patches_aug(X, Y,
                                 augment_and_norm=lambda x,y:(x,y),
                                 verbose=False):
     epoch = 0
-    tp = train_params
     while (True):
         epoch += 1
         current_idx = 0
