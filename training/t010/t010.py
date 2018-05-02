@@ -6,11 +6,14 @@ from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStoppin
 
 import unet
 import lib as ll
+import random
 import augmentation
   
+## build home directory to save output
 name = "training/t010/"
 ensure_exists(name)
 
+## load data
 img6 = imread('data/img006.tif')
 img6lut = imread('data/labels_lut.tif')
 img6_w_labs = np.concatenate([img6lut[:,:,[0]], img6], axis=2)
@@ -24,13 +27,12 @@ ys = ys_xy
 
 # define classweights
 n_classes = len(np.unique(ys))
-# classweights = (1-counts/counts.sum())/(len(counts)-1)
 classweights = [1/n_classes,]*n_classes
 
 # convert ys to categorical
 ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
 
-# split 400x400 into 100x100 patches
+# split 400x400 into 16x100x100 patches
 nz,ny,nx,nc = xs.shape
 ny4,nx4 = ny//4, nx//4
 xs = xs.reshape((nz,4,ny4,4,nx4,nc))
@@ -41,7 +43,7 @@ ys = ys.reshape((nz,4,ny4,4,nx4,nc))
 ys = perm(ys,"z1y2xc","z12yxc")
 ys = ys.reshape((-1,ny4,nx4,nc))
 
-## Turn off the irrelevant class
+## turn off the `ignore` class
 mask = ys[...,3]==1
 ys[mask] = 0
 
@@ -87,42 +89,68 @@ optim = Adam(lr=1e-4)
 loss = unet.my_categorical_crossentropy(weights=classweights, itd=4)
 net.compile(optimizer=optim, loss=loss, metrics=['accuracy'])
 
-checkpointer = ModelCheckpoint(filepath=name + "w001.h5", verbose=0, save_best_only=True, save_weights_only=True)
+checkpointer = ModelCheckpoint(filepath=name + "w001_2.h5", verbose=0, save_best_only=True, save_weights_only=True)
 earlystopper = EarlyStopping(patience=30, verbose=0)
 reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
 callbacks = [checkpointer, earlystopper, reduce_lr]
 
-def random_augmentation_xy(xpatch, ypatch):
+def random_augmentation_xy(xpatch, ypatch, train=True):
   if random.random()<0.5:
       xpatch = np.flip(xpatch, axis=1)
       ypatch = np.flip(ypatch, axis=1)
   if random.random()<0.5:
       xpatch = np.flip(xpatch, axis=0)
       ypatch = np.flip(ypatch, axis=0)
-  if random.random()<0.5:
-      delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
-      xpatch,_,_ = augmentation.unet_warp_channels(xpatch, delta=delta)
-      ypatch,_,_ = augmentation.unet_warp_channels(ypatch, delta=delta)
+  # if random.random()<0.5:
+  #     delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
+  #     xpatch = augmentation.unet_warp_channels(xpatch, delta=delta)
+  #     ypatch = augmentation.unet_warp_channels(ypatch, delta=delta)
   if random.random()<0.5:
       randangle = (random.random()-0.5)*60 # even dist between ± 30
       xpatch  = rotate(xpatch, randangle, reshape=False, mode='reflect')
       ypatch  = rotate(ypatch, randangle, reshape=False, mode='reflect')
+  if train:
+    if random.random()<0.1:
+        m = random.random()*xpatch.mean() # channels already normed
+        s = random.random()*xpatch.std()
+        noise = np.random.normal(m/4,s/4,xpatch.shape).astype(xpatch.dtype)
+        xpatch += noise
+  xpatch = xpatch.clip(min=0)
+  xpatch = xpatch/xpatch.mean((0,1))
   return xpatch, ypatch
 
+
+batchsize = 3
+stepsperepoch = xs_train.shape[0] // batchsize
+validationsteps = xs_vali.shape[0] // batchsize
 bgen = unet.batch_generator_patches_aug(xs_train, ys_train, 
-                                  steps_per_epoch=100, 
-                                  batch_size=3, 
+                                  # steps_per_epoch=100, 
+                                  batch_size=batchsize,
                                   augment_and_norm=random_augmentation_xy)
 
+
+f_valiaug = lambda x,y:random_augmentation_xy(x,y,train=False)
+
+vgen = unet.batch_generator_patches_aug(xs_vali, ys_vali,
+                                  # steps_per_epoch=100,
+                                  batch_size=batchsize,
+                                  augment_and_norm=f_valiaug)
+
 history = net.fit_generator(bgen,
-                  steps_per_epoch=100,
+                  steps_per_epoch=stepsperepoch,
                   epochs=60,
                   verbose=1,
                   callbacks=callbacks,
-                  validation_data=(xs_vali, ys_vali))
+                  validation_data=vgen,
+                  validation_steps=validationsteps)
 
-net.save_weights(name + 'w002.h5')
-json.dump(history.history, open(name + 'history.json', 'w'))
+net.save_weights(name + 'w002_2.h5')
+# json.dump(history.history, open(name + 'history.json', 'w'))
+print(history.history, file=open(name + 'history.txt','w'))
+
+## plot results!
+
+
 
 ## Predictions!
 
@@ -133,13 +161,12 @@ x = x/x.mean((1,2), keepdims=True)
 x.shape
 img6pred = net.predict(x)
 img6pred = img6pred.reshape((a,b,c,d,n_classes))
-
-
+np.save(name + 'img6pred_w002', img6pred)
 
 
 
 ## find divisions
-from math import ceil
+
 x = img6pred[:,:,:,:]
 a,b,c,d,e = x.shape
 x = x.reshape((a,b,c,d,e))
@@ -156,14 +183,9 @@ x2.shape
 x2 = perm(x2,'12yxc','1y2xc')
 a,b,c,d,e = x2.shape
 x2 = x2.reshape((a*b,c*d,e))
-np.save('qsave', x2[...,[4,1,2]])
+np.save(name + 'divisions_w002', x2[...,[4,1,2]])
 
-## more divisions
-x = img6pred[-2,...,4] #.max(1)
-np.save('qsave', x)
-
-
-
+## 
 
 
 

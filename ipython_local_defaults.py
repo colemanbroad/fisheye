@@ -55,8 +55,15 @@ def timewindow(lst, t, l):
   if t >= len(lst) - l//2: t=len(lst) - ceil(l/2)
   return lst[t-l//2:t+ceil(l/2)]
 
+def qopene():
+  res = run(['rsync efal:qsave.npy .'], shell=True)
+  print(res)
+  return np.load('qsave.npy')
+
 def qopen():
-  run(['rsync', 'efal:qsave.npy .'])
+  # import subprocess
+  res = run(['rsync broaddus@falcon:qsave.npy .'], shell=True)
+  print(res)
   return np.load('qsave.npy')
 
 def updateall(w,lab):
@@ -85,5 +92,10 @@ def onclick_centerpoints(event):
   if event.key=='C':
     print('added! ', event.key)
     newcents.append([zi,yi,xi])
-
 # cid = iss.fig.canvas.mpl_connect('button_press_event', onclick_centerpoints)
+
+def shownew(img,**kwargs):
+  plt.figure()
+  return plt.imshow(img, **kwargs)
+
+

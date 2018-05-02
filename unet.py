@@ -225,7 +225,7 @@ def batch_generator_patches(X, Y, train_params, verbose=False):
             yield Xbatch, Ybatch
 
 def batch_generator_patches_aug(X, Y, 
-                                steps_per_epoch=100,
+                                # steps_per_epoch=100,
                                 batch_size=4,
                                 augment_and_norm=lambda x,y:(x,y),
                                 verbose=False):
@@ -233,17 +233,21 @@ def batch_generator_patches_aug(X, Y,
     while (True):
         epoch += 1
         current_idx = 0
-        batchnum = 0
+        # batchnum = 0
         inds = np.arange(X.shape[0])
         np.random.shuffle(inds)
         X = X[inds]
         Y = Y[inds]
-        while batchnum < steps_per_epoch:
-            Xbatch, Ybatch = X[current_idx:current_idx + batch_size].copy(), Y[current_idx:current_idx + batch_size].copy()
+        # while batchnum < steps_per_epoch:
+        while current_idx < X.shape[0]:
+            i0 = current_idx
+            i1 = min(current_idx + batch_size, X.shape[0])
+            Xbatch, Ybatch = X[i0:i1].copy(), Y[i0:i1].copy()
             # io.imsave('X.tif', Xbatch, plugin='tifffile')
             # io.imsave('Y.tif', Ybatch, plugin='tifffile')
 
             current_idx += batch_size
+            batchnum += 1
 
             for i in range(Xbatch.shape[0]):
                 x = Xbatch[i]
@@ -252,11 +256,13 @@ def batch_generator_patches_aug(X, Y,
                 Xbatch[i] = x
                 Ybatch[i] = y
 
+            if random.random() < 0.05:
+                np.savez('XY_{}_{}'.format(epoch,batchnum), x=Xbatch, y=Ybatch)
+
             # io.imsave('Xauged.tif', Xbatch.astype('float32'), plugin='tifffile')
             # io.imsave('Yauged.tif', Ybatch.astype('float32'), plugin='tifffile')
 
             # print('xshape', Xbatch.shape)
             # print('yshape', Ybatch.shape)
 
-            batchnum += 1
             yield Xbatch, Ybatch
