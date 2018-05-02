@@ -23,8 +23,8 @@ lab = np.array([label(x>0.5)[0] for x in pimg_blur])
 def f(x):
 	x1 = x[...,1] # nuclei
 	x2 = x[...,2] # borders
-	mask = (x1 > 0.5) #& (x2 < 0.1)
-	res = watershed(1-x1,label(x1>0.9)[0], mask = mask)
+	mask = (x1 > 0.5) & (x2 < 0.05)
+	# res = watershed(1-x1,label(x1>0.9)[0], mask = mask)
 	return res
 lab = np.array([f(x) for x in pimg[2:4]])
 

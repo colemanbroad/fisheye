@@ -1,4 +1,4 @@
-from ipython_defaults import *
+from ipython_remote_defaults import *
 
 from keras.optimizers import Adam, SGD
 from keras.utils import np_utils
@@ -14,10 +14,10 @@ mypath = Path("training/t010/")
 mypath.mkdir(exist_ok=True)
 
 ## load data
-img6 = imread('data/img006.tif')
-img6lut = imread('data/labels_lut.tif')
-img6_w_labs = np.concatenate([img6lut[:,:,[0]], img6], axis=2)
-inds, traindata = ll.fixlabels(img6_w_labs)
+img = imread('data/img006.tif')
+imglut = imread('data/labels_lut.tif')
+img_w_labs = np.concatenate([imglut[:,:,[0]], img], axis=2)
+inds, traindata = ll.fixlabels(img_w_labs)
 
 ## arrange into xs and ys
 xs_xy = traindata[:,[1,2]].copy()
@@ -139,15 +139,21 @@ vgen = unet.batch_generator_patches_aug(xs_vali, ys_vali,
 
 history = net.fit_generator(bgen,
                   steps_per_epoch=stepsperepoch,
-                  epochs=10,
+                  epochs=20,
                   verbose=1,
                   callbacks=callbacks,
                   validation_data=vgen,
                   validation_steps=validationsteps)
 
 net.save_weights(mypath / 'w002_2.h5')
+
 # json.dump(history.history, open(mypath / 'history.json', 'w'))
 print(history.history, file=open(mypath / 'history.txt','w'))
+for k,v in history.history.items():
+  plt.plot(v, label=k)
+plt.legend()
+plt.savefig(mypath / 'traj.png')
+
 
 ## plot results!
 
@@ -155,21 +161,24 @@ print(history.history, file=open(mypath / 'history.txt','w'))
 
 ## Predictions!
 
-x = perm(img6,"tzcyx","tzyxc")
+x = perm(img,"tzcyx","tzyxc")
 a,b,c,d,e = x.shape
 # x = x[[9],:b//4] # downsize for local testing
 # a,b,c,d,e = x.shape
 x = x.reshape((a*b,c,d,e))
 x = x/x.mean((1,2), keepdims=True)
 x.shape
-img6pred = net.predict(x)
-img6pred = img6pred.reshape((a,b,c,d,n_classes))
-np.save(mypath / 'img6pred_w002', img6pred)
+pimg = net.predict(x)
+pimg = pimg.reshape((a,b,c,d,n_classes))
+np.save(mypath / 'pimg_w002', pimg)
 
+## max division channel across z
+
+np.save(mypath / 'max_z_divchan', pimg[:,...,4].max(1))
 
 ## find divisions
 
-x = img6pred[:,:,:,:]
+x = pimg[:,:,:,:,:]
 a,b,c,d,e = x.shape
 x = x.reshape((a,b,c,d,e))
 div = x[:,::6,...,4].sum((2,3))
@@ -185,9 +194,33 @@ x2.shape
 x2 = perm(x2,'12yxc','1y2xc')
 a,b,c,d,e = x2.shape
 x2 = x2.reshape((a*b,c*d,e))
-np.save(mypath / 'divisions_w002', x2[...,[4,1,2]])
+np.save(mypath / 'find_divisions', x2[::4,::4,[4,1,2]])
 
-## 
+## compute instance segmentation statistics
+
+def f(x):
+  x1 = x[...,1] # nuclei
+  x2 = x[...,2] # borders
+  mask = (x1 > 0.5) & (x2 < 0.05)
+  # res = watershed(1-x1,label(x1>0.9)[0], mask = mask)
+  res = label(mask)[0]
+  return res
+lab = np.array([f(x) for x in pimg])
+
+nhls = lib.labs2nhls(lab, img, simple=True)
+
+plt.figure()
+cm = sns.cubehelix_palette(len(nhls))
+for i,nhl in enumerate(nhls):
+  areas = [n['area'] for n in nhl]
+  areas = sorted(areas)
+  plt.plot(areas, c=cm[i])
+plt.savefig(mypath / 'sizes.png')
+
+
+
+
+
 
 
 

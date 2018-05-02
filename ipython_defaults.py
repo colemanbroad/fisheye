@@ -20,6 +20,7 @@ from tabulate import tabulate
 import networkx as nx
 import numpy as np
 import pandas as pd
+import seaborn as sns
 from tifffile import imread, imsave
 from scipy.ndimage import zoom, label, distance_transform_edt, rotate
 from scipy.signal import gaussian
