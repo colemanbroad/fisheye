@@ -5,6 +5,8 @@ UNET architecture for pixelwise classification
 import numpy as np
 import skimage.io as io
 import json
+import random
+from pathlib import Path
 
 from keras.activations import softmax
 from keras.models import Model
@@ -228,17 +230,26 @@ def batch_generator_patches_aug(X, Y,
                                 # steps_per_epoch=100,
                                 batch_size=4,
                                 augment_and_norm=lambda x,y:(x,y),
-                                verbose=False):
+                                verbose=False,
+                                savepath=None):
+
+    if type(savepath) is str:
+        savepath = Path(savepath)
+
     epoch = 0
     while (True):
         epoch += 1
         current_idx = 0
-        # batchnum = 0
+        batchnum = 0
         inds = np.arange(X.shape[0])
         np.random.shuffle(inds)
         X = X[inds]
         Y = Y[inds]
         # while batchnum < steps_per_epoch:
+
+        Xepoch = []
+        Yepoch = []
+        
         while current_idx < X.shape[0]:
             i0 = current_idx
             i1 = min(current_idx + batch_size, X.shape[0])
@@ -256,8 +267,9 @@ def batch_generator_patches_aug(X, Y,
                 Xbatch[i] = x
                 Ybatch[i] = y
 
-            if random.random() < 0.05:
-                np.savez('XY_{}_{}'.format(epoch,batchnum), x=Xbatch, y=Ybatch)
+            if epoch==1 and savepath is not None:
+                Xepoch.append(Xbatch)
+                Yepoch.append(Ybatch)
 
             # io.imsave('Xauged.tif', Xbatch.astype('float32'), plugin='tifffile')
             # io.imsave('Yauged.tif', Ybatch.astype('float32'), plugin='tifffile')
@@ -266,3 +278,6 @@ def batch_generator_patches_aug(X, Y,
             # print('yshape', Ybatch.shape)
 
             yield Xbatch, Ybatch
+
+        if epoch==1 and savepath is not None:
+            np.savez(savepath / 'XY_train', x=np.array(Xepoch), y=np.array(Yepoch))

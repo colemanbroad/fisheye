@@ -1,4 +1,4 @@
-from ipython_remote_defaults import *
+from ipython_defaults import *
 
 from keras.optimizers import Adam, SGD
 from keras.utils import np_utils
@@ -6,12 +6,12 @@ from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStoppin
 
 import unet
 import lib as ll
-import random
 import augmentation
-  
+
+
 ## build home directory to save output
-name = "training/t010/"
-ensure_exists(name)
+mypath = Path("training/t010/")
+mypath.mkdir(exist_ok=True)
 
 ## load data
 img6 = imread('data/img006.tif')
@@ -59,17 +59,17 @@ ys = ys*distimg[...,np.newaxis]
 
 print(ys.max((0,1,2)))
 
-# normalize
+## normalize
 xs = xs/xs.mean((1,2), keepdims=True)
 
-# shuffle
+## shuffle
 inds = np.arange(xs.shape[0])
 np.random.shuffle(inds)
 invers = np.argsort(np.arange(inds.shape[0])[inds])
-xs = xs[inds]
-ys = ys[inds]
+xs = xs[inds] # [:7*6] downsize for local testing
+ys = ys[inds] # [:7*6] downsize for local testing
 
-# train test split
+## train vali split
 split = 7
 n_vali = xs.shape[0]//split
 xs_train = xs[:-n_vali]
@@ -89,7 +89,7 @@ optim = Adam(lr=1e-4)
 loss = unet.my_categorical_crossentropy(weights=classweights, itd=4)
 net.compile(optimizer=optim, loss=loss, metrics=['accuracy'])
 
-checkpointer = ModelCheckpoint(filepath=name + "w001_2.h5", verbose=0, save_best_only=True, save_weights_only=True)
+checkpointer = ModelCheckpoint(filepath=str(mypath / "w001_2.h5"), verbose=0, save_best_only=True, save_weights_only=True)
 earlystopper = EarlyStopping(patience=30, verbose=0)
 reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
 callbacks = [checkpointer, earlystopper, reduce_lr]
@@ -119,14 +119,14 @@ def random_augmentation_xy(xpatch, ypatch, train=True):
   xpatch = xpatch/xpatch.mean((0,1))
   return xpatch, ypatch
 
-
 batchsize = 3
 stepsperepoch = xs_train.shape[0] // batchsize
 validationsteps = xs_vali.shape[0] // batchsize
 bgen = unet.batch_generator_patches_aug(xs_train, ys_train, 
                                   # steps_per_epoch=100, 
                                   batch_size=batchsize,
-                                  augment_and_norm=random_augmentation_xy)
+                                  augment_and_norm=random_augmentation_xy,
+                                  savepath=mypath)
 
 
 f_valiaug = lambda x,y:random_augmentation_xy(x,y,train=False)
@@ -134,35 +134,37 @@ f_valiaug = lambda x,y:random_augmentation_xy(x,y,train=False)
 vgen = unet.batch_generator_patches_aug(xs_vali, ys_vali,
                                   # steps_per_epoch=100,
                                   batch_size=batchsize,
-                                  augment_and_norm=f_valiaug)
+                                  augment_and_norm=f_valiaug,
+                                  savepath=None)
 
 history = net.fit_generator(bgen,
                   steps_per_epoch=stepsperepoch,
-                  epochs=60,
+                  epochs=10,
                   verbose=1,
                   callbacks=callbacks,
                   validation_data=vgen,
                   validation_steps=validationsteps)
 
-net.save_weights(name + 'w002_2.h5')
-# json.dump(history.history, open(name + 'history.json', 'w'))
-print(history.history, file=open(name + 'history.txt','w'))
+net.save_weights(mypath / 'w002_2.h5')
+# json.dump(history.history, open(mypath / 'history.json', 'w'))
+print(history.history, file=open(mypath / 'history.txt','w'))
 
 ## plot results!
 
-
+# plt.plot(history.history)
 
 ## Predictions!
 
 x = perm(img6,"tzcyx","tzyxc")
 a,b,c,d,e = x.shape
+# x = x[[9],:b//4] # downsize for local testing
+# a,b,c,d,e = x.shape
 x = x.reshape((a*b,c,d,e))
 x = x/x.mean((1,2), keepdims=True)
 x.shape
 img6pred = net.predict(x)
 img6pred = img6pred.reshape((a,b,c,d,n_classes))
-np.save(name + 'img6pred_w002', img6pred)
-
+np.save(mypath / 'img6pred_w002', img6pred)
 
 
 ## find divisions
@@ -183,7 +185,7 @@ x2.shape
 x2 = perm(x2,'12yxc','1y2xc')
 a,b,c,d,e = x2.shape
 x2 = x2.reshape((a*b,c*d,e))
-np.save(name + 'divisions_w002', x2[...,[4,1,2]])
+np.save(mypath / 'divisions_w002', x2[...,[4,1,2]])
 
 ## 
 
