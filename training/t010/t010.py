@@ -7,6 +7,7 @@ from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStoppin
 import unet
 import lib as ll
 import augmentation
+from segtools import lib as seglib
 
 
 ## build home directory to save output
@@ -207,7 +208,7 @@ def f(x):
   return res
 lab = np.array([f(x) for x in pimg])
 
-nhls = lib.labs2nhls(lab, img, simple=True)
+nhls = seglib.labs2nhls(lab, img[:,:,1], simple=True)
 
 plt.figure()
 cm = sns.cubehelix_palette(len(nhls))
