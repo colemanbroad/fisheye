@@ -2,9 +2,10 @@ from ipython_defaults import *
 
 ## visual stuff relying on anaconda
 import matplotlib
-matplotlib.use('Qt5Agg')
+# matplotlib.use('Qt5Agg')
 import matplotlib.pyplot as plt
 plt.ion()
+plt.switch_backend('qt5agg')
 import seaborn as sns
 
 ## my local code
@@ -17,7 +18,7 @@ from segtools import segtools_simple as ss
 from segtools import plotting
 from segtools import voronoi
 sys.path.insert(0,'/Users/broaddus/Desktop/Projects/')
-from stackview.stackview import Stack
+from stackview.stackview import Stack #, StackQt
 from planaria_tracking import lib as tracklib
 
 ## martin's stuff

@@ -208,7 +208,7 @@ def f(x):
   return res
 lab = np.array([f(x) for x in pimg])
 
-nhls = seglib.labs2nhls(lab, img[:,:,1], simple=True)
+nhls = seglib.labs2nhls(lab, img[:,:,1], simple=False)
 
 plt.figure()
 cm = sns.cubehelix_palette(len(nhls))
@@ -216,7 +216,7 @@ for i,nhl in enumerate(nhls):
   areas = [n['area'] for n in nhl]
   areas = sorted(areas)
   plt.plot(areas, c=cm[i])
-plt.savefig(mypath / 'sizes.png')
+plt.savefig(mypath / 'sizes.pdf')
 
 
 
