@@ -16,8 +16,7 @@ mypath = Path("training/t011/")
 mypath.mkdir(exist_ok=True)
 myfile = Path(__file__)
 print(mypath / myfile.name)
-shutil.copy(myfile, mypath / str(mypath.stem + '.py'))
-sys.exit(0)
+shutil.copy(myfile, mypath / 'train_and_seg.py')
 
 ## load data
 img = imread('data/img006.tif')
