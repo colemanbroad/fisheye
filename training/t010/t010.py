@@ -11,7 +11,7 @@ from segtools import lib as seglib
 from segtools import segtools_simple as ss
 from scipy.ndimage.filters import convolve
 
-## build home directory to save output
+## note: all paths are relative to project home directory
 mypath = Path("training/t011/")
 mypath.mkdir(exist_ok=True)
 myfile = Path(__file__)
