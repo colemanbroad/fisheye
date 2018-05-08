@@ -67,7 +67,7 @@ def onclick_centerpoints(event):
     newcents.append([zi,yi,xi])
 # cid = iss.fig.canvas.mpl_connect('button_press_event', onclick_centerpoints)
 
-def shownew(img,**kwargs):
+def imshownew(img,**kwargs):
   plt.figure()
   return plt.imshow(img, **kwargs)
 

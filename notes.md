@@ -23,6 +23,8 @@
 `res042`, `res043` we see the cell membrane even during Meta/Ana - phase?
 `res000`: movie across time of original `img6` data. single slice z=60.
     size in MB: gif: 27, tif:92, avi(jpeg): 7, png(one time point) 5
+`img007` was `141029Ath5LAP2b-GFP_bactin-rasmKate2_view1_Subset_cell1-1.tif`
+`img008` was `MAX_141029Ath5LAP2b-GFP_bactin-rasmKate2_view1_Subset_cell1.tif`
 
 # ilp files
 
@@ -556,12 +558,70 @@ Right now the segmentation works only poorly. It proposes 130 objects per image 
     at least 4 oversegmented blobs with 5 or 6 cells per blob
     at least 30 small objects that are not nuclei, but might be pieces of nuclei
 
-- [ ] Show that segmentation works. Take time to go over solution w curation tools until you have 1000 trajectories.
+- [ ] Show that segmentation works.
+- [ ] Take time to go over solution w curation tools until you have 1000 trajectories.
 But this doesn't show the comparative advantage of the new tech!
 Once we have the correct solution as GT, then we can show the comparative advantage?
 How do we show advantage of curation tools?
     Timing?
 
+---
+
+Curate a single timepoint fully
+Every time you train a new classifier, try a new instance seg, or do *anything* upstream of segmentation you should compute the SEG score against this result.
+The result should have some densely packed clusters of nuclei which are hard to segment properly!
+Having this will allow you to experiment with all the upsream processes and models without having to analyze the results by eye every time. 
+Actually it's the only thing that allows you to do so. Analysis by eye would be a much worse alternative!
+Now we just have to decide what Ground Truth actually means.
+Do we want to have every pixel exactly labeled from every timepoint?
+Do we want to make the ground truth by only looking at a single view?
+Do we want to make the ground truth by drawing directly? Or by bootstrapping a rough initial estimate?
+Do we want it to be pixelwise labels at all?
+Do we want it to be complete? or do we only want to ignore False Positives and only punish False negatives? (Like SEG score does).
+What if we took a well curated $nhl$ to be ground truth? No need for pixels at all!
+The right answer to all of these questions is that it depends on the goal of the project!
+Right now we have used the biologists to make training data, which is great... but we can't use that training data as instance segmentation ground truth... *or can we*?
+idea: We could do a 3D instance segmentation and only compare the results within a single annotated slice!
+Is this exactly what ISBI does for its 3D segmentations? Yes.
+This way you only have to annotate slices, not dense 3D volumes, but you still use 3D instance seg techniques!
+We can just take a small number of slices, maybe even one or two, and set them aside...
+Actually if we wanted to cheat we could just use all the same slices that we already use for pixelwise training data, but use them instead for instance seg GT!
+This way we're testing our ability to overfit on that data...
+
+First predict across all of time (or at least the times where you have annotations)
+Then create the instance segmentation, which will have the same shape as the predictions, but only one channel instead of 5.
+Then we indentify all the slices that were labeled (using inds)
+These are specific t and z slices.
+
+OK! Now you've added post-process blurring before instance segmentation, and you're computing the SEG score on each annotated 2D slice! You're also saving the size distribution... The size dist is greatly improved by blurring, because we remove the tiny, shitty cells. But that doesn't necessarily mean it will improve the seg score. Especially since SEG doesn't punish for the many small false positives in the unblurred result.
+
+# img007
+
+We've added a new biological problem to this project!
+img007 was `141029Ath5LAP2b-GFP_bactin-rasmKate2_view1_Subset_cell1-1.tif`
+img008 was `MAX_141029Ath5LAP2b-GFP_bactin-rasmKate2_view1_Subset_cell1.tif`
+
+Now we've got a new project that really requires accurately measuring cell shape in 3D and correlating it with movement data.
+Cells' nuclei get pulled, pushed and dragged during apical/basal migration which changes their shape.
+They might be pulled by microtubules, or pushed by microtubles.
+Can we determine which is correct from the shapes alone?
+To convince a skeptic we would need to show that large movements are most often preceded by stretched nuclei.
+And we need to distinguish shape changes caused by pushing from those caused by pulling.
+Mosaic labeling means we don't get to estimate real cell numbers.
+We *would* learn.
+    - cell size and shape
+    - shape asymmetry
+    - trajectory
+    - correlate large displacements with shape asymmetry
+    - shape during division
+    - time required for division
+    - time between divisions
+    - division asymmetry stuff. 
+
+Stuff to do:
+We now have to train using the old labeled data but excluding the nuclear channel
+We only have the nuclear envelope label in this mosaic mode.
+We moved a promoter that activates GFP-tagged nuclear-envelope-associated-protein in neurons just after their creation during asymmetric division.
 
 
 
@@ -576,8 +636,6 @@ U-net w explicit boundary class and distance to nearest boundary!
 Distance to boundary is common.
 Should we use that for seeds in watershed?
 But use the nuclei and boundary channels to define the watershed potential?
-
-
 
 
 # Footnotes

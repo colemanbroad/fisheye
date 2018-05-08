@@ -8,17 +8,18 @@ import unet
 import lib as ll
 import augmentation
 from segtools import lib as seglib
-
+from segtools import segtools_simple as ss
+from scipy.ndimage.filters import convolve
 
 ## build home directory to save output
-mypath = Path("training/t010/")
+mypath = Path("training/t011/")
 mypath.mkdir(exist_ok=True)
 
 ## load data
 img = imread('data/img006.tif')
 imglut = imread('data/labels_lut.tif')
 img_w_labs = np.concatenate([imglut[:,:,[0]], img], axis=2)
-inds, traindata = ll.fixlabels(img_w_labs)
+inds_lab, traindata = ll.fixlabels(img_w_labs)
 
 ## arrange into xs and ys
 xs_xy = traindata[:,[1,2]].copy()
@@ -90,7 +91,7 @@ optim = Adam(lr=1e-4)
 loss = unet.my_categorical_crossentropy(weights=classweights, itd=4)
 net.compile(optimizer=optim, loss=loss, metrics=['accuracy'])
 
-checkpointer = ModelCheckpoint(filepath=str(mypath / "w001_2.h5"), verbose=0, save_best_only=True, save_weights_only=True)
+checkpointer = ModelCheckpoint(filepath=str(mypath / "w001.h5"), verbose=0, save_best_only=True, save_weights_only=True)
 earlystopper = EarlyStopping(patience=30, verbose=0)
 reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
 callbacks = [checkpointer, earlystopper, reduce_lr]
@@ -106,10 +107,10 @@ def random_augmentation_xy(xpatch, ypatch, train=True):
   #     delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
   #     xpatch = augmentation.unet_warp_channels(xpatch, delta=delta)
   #     ypatch = augmentation.unet_warp_channels(ypatch, delta=delta)
-  if random.random()<0.5:
-      randangle = (random.random()-0.5)*60 # even dist between ± 30
-      xpatch  = rotate(xpatch, randangle, reshape=False, mode='reflect')
-      ypatch  = rotate(ypatch, randangle, reshape=False, mode='reflect')
+  # if random.random()<0.5:
+  #     randangle = (random.random()-0.5)*60 # even dist between ± 30
+  #     xpatch  = rotate(xpatch, randangle, reshape=False, mode='reflect')
+  #     ypatch  = rotate(ypatch, randangle, reshape=False, mode='reflect')
   if train:
     if random.random()<0.1:
         m = random.random()*xpatch.mean() # channels already normed
@@ -146,9 +147,8 @@ history = net.fit_generator(bgen,
                   validation_data=vgen,
                   validation_steps=validationsteps)
 
-net.save_weights(mypath / 'w002_2.h5')
+net.save_weights(mypath / 'w002.h5')
 
-# json.dump(history.history, open(mypath / 'history.json', 'w'))
 print(history.history, file=open(mypath / 'history.txt','w'))
 for k,v in history.history.items():
   plt.plot(v, label=k)
@@ -171,7 +171,7 @@ x = x/x.mean((1,2), keepdims=True)
 x.shape
 pimg = net.predict(x)
 pimg = pimg.reshape((a,b,c,d,n_classes))
-np.save(mypath / 'pimg_w002', pimg)
+np.save(mypath / 'pimg', pimg)
 
 ## max division channel across z
 
@@ -199,16 +199,36 @@ np.save(mypath / 'find_divisions', x2[::4,::4,[4,1,2]])
 
 ## compute instance segmentation statistics
 
+weights = np.full((3, 3, 3), 1.0/27)
+# pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
+# pimg = np.array(pimg)
+# pimg = pimg.transpose((0,2,3,4,1))
+# pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
+# pimg = np.array(pimg)
+# pimg = pimg.transpose((0,2,3,4,1))
+
 def f(x):
   x1 = x[...,1] # nuclei
   x2 = x[...,2] # borders
-  mask = (x1 > 0.5) & (x2 < 0.05)
-  # res = watershed(1-x1,label(x1>0.9)[0], mask = mask)
-  res = label(mask)[0]
+  mask = (x1 > 0.5) #& (x2 < 0.15)
+  res  = watershed(1-x1,label(x1>0.9)[0], mask = mask)
+  # res = label(mask)[0]
   return res
-lab = np.array([f(x) for x in pimg])
+hyp = np.array([f(x) for x in pimg])
+mask = inds_lab!=0
+# mask = mask[0]
+y_pred_instance = hyp[mask]
 
-nhls = seglib.labs2nhls(lab, img[:,:,1], simple=False)
+def f(x):
+  x[x!=1] = 0
+  x = label(x)[0]
+  return x
+y_gt_instance = np.array([f(x) for x in traindata[:,0].copy()])
+
+res = [ss.seg(x,y) for x,y in zip(y_gt_instance, y_pred_instance)]
+print({'mean' : np.mean(res), 'std' : np.std(res)}, file=open(mypath / 'SEG.txt', 'w'))
+
+nhls = seglib.labs2nhls(hyp, img[:,:,1], simple=False)
 
 plt.figure()
 cm = sns.cubehelix_palette(len(nhls))
@@ -216,7 +236,10 @@ for i,nhl in enumerate(nhls):
   areas = [n['area'] for n in nhl]
   areas = sorted(areas)
   plt.plot(areas, c=cm[i])
-plt.savefig(mypath / 'sizes.pdf')
+plt.savefig(mypath / 'cell_sizes.pdf')
+
+#hi coleman! keep coding!
+#best, romina :)
 
 
 
