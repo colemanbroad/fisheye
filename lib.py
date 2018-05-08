@@ -1,6 +1,8 @@
 import numpy as np
 import re
 import pandas
+from segtools import lib as seglib
+from scipy.ndimage import label
 
 def autocorr(x):
     result = np.correlate(x, x, mode='full')
@@ -62,7 +64,7 @@ def fixlabels(imgWlab):
   You can use a single slice on the left side of an assignment, but not a slice of a slice!
   We have to break this into two separate assignments.
   """
-  inds = imgWlab.max((3,4))[:,:,0]
+  inds = imgWlab[:,:,0].max((2,3))
   x0 = imgWlab[inds>0]
   x = x0[:,0]
   x[x==0] = 2   # background
@@ -72,6 +74,18 @@ def fixlabels(imgWlab):
   x[x==85] = 4  # divisions
   x0[:,0] = x
   return inds, x0
+
+def labels2nhl(lab):
+  lab[lab!=1] = 2
+  lab[lab==2] = 0
+  hyp = label(lab)[0]
+  nhl = seglib.hyp2nhl_2d(hyp)
+  return hyp,nhl
+
+def join_pimg_to_imgwlabs(imgwlabs, pimg):
+  pimg = pimg.transpose((0,1,4,2,3))
+  res = np.concatenate([imgwlabs, pimg], axis=2)
+  return res
 
 @DeprecationWarning
 def tilez(img, ncols=8, ds=1):

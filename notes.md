@@ -626,6 +626,7 @@ We moved a promoter that activates GFP-tagged nuclear-envelope-associated-protei
 
 
 
+
 # good ideas
 
 For segmentation based on watershed we have a few options.

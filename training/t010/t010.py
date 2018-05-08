@@ -14,6 +14,10 @@ from scipy.ndimage.filters import convolve
 ## build home directory to save output
 mypath = Path("training/t011/")
 mypath.mkdir(exist_ok=True)
+myfile = Path(__file__)
+print(mypath / myfile.name)
+shutil.copy(myfile, mypath / str(mypath.stem + '.py'))
+sys.exit(0)
 
 ## load data
 img = imread('data/img006.tif')

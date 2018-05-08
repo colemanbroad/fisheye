@@ -14,7 +14,6 @@ print(img.shape)
 # pimg_blur = np.array([f(p) for p in pimg])
 
 
-
 ## just one blob
 lab = label(pimg_blur>0.8)[0]
 ## reasonable start
