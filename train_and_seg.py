@@ -11,15 +11,17 @@ from segtools import lib as seglib
 from segtools import segtools_simple as ss
 from scipy.ndimage.filters import convolve
 
+
+QUICK = False
+
 ## note: all paths are relative to project home directory
-mypath = Path("training/t013/")
-QUICK = True
-mypath.mkdir(exist_ok=True)
+mypath = Path("training/t017/")
+mypath.mkdir(exist_ok=False)
 myfile = Path(__file__)
 print(mypath / myfile.name)
 shutil.copy(myfile, mypath / 'train_and_seg.py')
-sys.stdout = open(mypath / 'stdout', 'w')
-sys.stderr = open(mypath / 'stderr', 'w')
+sys.stdout = open(mypath / 'stdout.txt', 'w')
+sys.stderr = open(mypath / 'stderr.txt', 'w')
 
 ## load data
 img = imread('data/img006.tif')
@@ -106,21 +108,21 @@ reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, ver
 callbacks = [checkpointer, earlystopper, reduce_lr]
 
 def random_augmentation_xy(xpatch, ypatch, train=True):
-  if random.random()<0.5:
-      xpatch = np.flip(xpatch, axis=1)
-      ypatch = np.flip(ypatch, axis=1)
-  if random.random()<0.5:
-      xpatch = np.flip(xpatch, axis=0)
-      ypatch = np.flip(ypatch, axis=0)
   # if random.random()<0.5:
-  #     delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
-  #     xpatch = augmentation.unet_warp_channels(xpatch, delta=delta)
-  #     ypatch = augmentation.unet_warp_channels(ypatch, delta=delta)
+  #     xpatch = np.flip(xpatch, axis=1)
+  #     ypatch = np.flip(ypatch, axis=1)
+  # if random.random()<0.5:
+  #     xpatch = np.flip(xpatch, axis=0)
+  #     ypatch = np.flip(ypatch, axis=0)
   # if random.random()<0.5:
   #     randangle = (random.random()-0.5)*60 # even dist between ± 30
   #     xpatch  = rotate(xpatch, randangle, reshape=False, mode='reflect')
   #     ypatch  = rotate(ypatch, randangle, reshape=False, mode='reflect')
   if train:
+    if random.random()<0.5:
+        delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
+        xpatch = augmentation.warp_multichan(xpatch, delta=delta)
+        ypatch = augmentation.warp_multichan(ypatch, delta=delta)
     if random.random()<0.1:
         m = random.random()*xpatch.mean() # channels already normed
         s = random.random()*xpatch.std()
@@ -133,7 +135,7 @@ def random_augmentation_xy(xpatch, ypatch, train=True):
 batchsize = 3
 stepsperepoch = xs_train.shape[0] // batchsize
 validationsteps = xs_vali.shape[0] // batchsize
-bgen = unet.batch_generator_patches_aug(xs_train, ys_train, 
+bgen = unet.batch_generator_patches_aug(xs_train, ys_train,
                                   # steps_per_epoch=100, 
                                   batch_size=batchsize,
                                   augment_and_norm=random_augmentation_xy,
@@ -159,10 +161,16 @@ history = net.fit_generator(bgen,
 net.save_weights(mypath / 'w002.h5')
 
 print(history.history, file=open(mypath / 'history.txt','w'))
-for k,v in history.history.items():
-  plt.plot(v, label=k)
+def plot_hist_key(k):
+  plt.figure()
+  y1 = history.history[k]
+  y2 = history.history['val_' + k]
+  plt.plot(y1, label=k)
+  plt.plot(y2, label='val_' + k)
   plt.legend()
   plt.savefig(mypath / (k + '.png'))
+plot_hist_key('loss')
+plot_hist_key('acc')
 
 ## Predictions!
 
@@ -185,36 +193,45 @@ np.save(mypath / 'max_z_divchan', pimg[:,...,4].max(1))
 
 ## find divisions
 
-x = pimg[:,:,:,:,:]
-a,b,c,d,e = x.shape
-x = x.reshape((a,b,c,d,e))
-div = x[:,::6,...,4].sum((2,3))
+def find_divisions():
+  x = pimg[:,:,:,:,:]
+  a,b,c,d,e = x.shape
+  x = x.reshape((a,b,c,d,e))
+  div = x[:,::6,...,4].sum((2,3))
 
-dc = np.sort(div.flat)[-20]
+  dc = np.sort(div.flat)
+  ndivs = min(20, dc.shape[0])
+
+  nrows = 7
+  tz = np.argwhere(div > dc)[:nrows]
+
+  lst = list(range(x.shape[0]))
+  x2 = x[:,::6]
+  x2 = np.array([x2[timewindow(lst, n[0], nrows), n[1]] for n in tz])
+  a,b,c,d,e = x2.shape
+  x2.shape
+  x2 = perm(x2,'12yxc','1y2xc')
+  a,b,c,d,e = x2.shape
+  x2 = x2.reshape((a*b,c*d,e))
+  io.imsave(mypath / 'find_divisions.png', x2[::4,::4,[4,1,2]])
+
+find_divisions()
+
+## quit early if QUICK
+
 if QUICK:
-  dc = dc[-5] ## when you only have small data.
-
-tz = np.argwhere(div > dc)[:7]
-
-lst = list(range(x.shape[0]))
-x2 = x[:,::6]
-x2 = np.array([x2[timewindow(lst, n[0], 7), n[1]] for n in tz])
-a,b,c,d,e = x2.shape
-x2.shape
-x2 = perm(x2,'12yxc','1y2xc')
-a,b,c,d,e = x2.shape
-x2 = x2.reshape((a*b,c*d,e))
-io.imsave(mypath / 'find_divisions.png', x2[::4,::4,[4,1,2]])
+  sys.exit(0)
 
 ## compute instance segmentation statistics
 
-weights = np.full((3, 3, 3), 1.0/27)
-# pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
-# pimg = np.array(pimg)
-# pimg = pimg.transpose((0,2,3,4,1))
-# pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
-# pimg = np.array(pimg)
-# pimg = pimg.transpose((0,2,3,4,1))
+if BLUR:
+  weights = np.full((3, 3, 3), 1.0/27)
+  pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
+  pimg = np.array(pimg)
+  pimg = pimg.transpose((0,2,3,4,1))
+  pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
+  pimg = np.array(pimg)
+  pimg = pimg.transpose((0,2,3,4,1))
 
 def f(x):
   x1 = x[...,1] # nuclei
@@ -249,9 +266,6 @@ plt.savefig(mypath / 'cell_sizes.pdf')
 
 #hi coleman! keep coding!
 #best, romina :)
-
-
-
 
 
 

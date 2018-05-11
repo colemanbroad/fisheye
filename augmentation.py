@@ -1,5 +1,5 @@
 import numpy as np
-# from scipy.misc import imresize
+from scipy.misc import imresize
 import skimage.transform as tform
 from scipy.ndimage import label, zoom, rotate, distance_transform_edt
 import random
@@ -14,8 +14,8 @@ def warp_onechan(img, delta):
     """
     deltax, deltay = delta[0], delta[1]
     a,b = img.shape
-    deltax = tform.imresize(deltax, size=(a,b), mode='F')
-    deltay = tform.imresize(deltay, size=(a,b), mode='F')
+    deltax = imresize(deltax, size=(a,b), mode='F')
+    deltay = imresize(deltay, size=(a,b), mode='F')
     a1,b1 = deltax.shape
     # deltax = zoom(deltax, (a/a1,b/b1), order=3)
     # deltay = zoom(deltay, (a/a1,b/b1), order=3)
