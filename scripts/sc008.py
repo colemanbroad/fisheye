@@ -104,7 +104,4 @@ def onselect(verts):
     # self.collection.set_facecolors(self.fc)
     # self.canvas.draw_idle()
 
-## augmentation
-
-import augmentation
 

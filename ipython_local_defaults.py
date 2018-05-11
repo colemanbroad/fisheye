@@ -11,12 +11,7 @@ import seaborn as sns
 ## my local code
 
 from segtools import cell_view_lib as view
-from segtools import color
-from segtools import lib as seglib
 from segtools import spima
-from segtools import segtools_simple as ss
-from segtools import plotting
-from segtools import voronoi
 sys.path.insert(0,'/Users/broaddus/Desktop/Projects/')
 from stackview.stackview import Stack #, StackQt
 from planaria_tracking import lib as tracklib

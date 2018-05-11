@@ -525,7 +525,7 @@ This function will be similar to displaying disagreement between proposed seg an
 No, it should be symmetric between the two segs, and it should highlight disagreement.
 *Should it crop out disagreements or just highlight them in the full image?*
 
-# visuals
+# list of visual representations and iteractive modes
 
 3d view volume rendering of fluorescence images. single channel.
 3d view volume rendering of mod-colored label images.
@@ -544,28 +544,7 @@ slice view with object boundaries highlighted / colored
     clicks from stack view
     clicks on objects in stack view
 
-
-
-# todo
-
-What is there left to do until the project is finished?
-
-The goal is to get segmentation and tracking working for the first time in the retina.
-It has been tried before, without luck.
-Using U-net, slice annotations, 3D watershed, division annotations, custom views we can solve the problem.
-
-Right now the segmentation works only poorly. It proposes 130 objects per image including
-    at least 4 oversegmented blobs with 5 or 6 cells per blob
-    at least 30 small objects that are not nuclei, but might be pieces of nuclei
-
-- [ ] Show that segmentation works.
-- [ ] Take time to go over solution w curation tools until you have 1000 trajectories.
-But this doesn't show the comparative advantage of the new tech!
-Once we have the correct solution as GT, then we can show the comparative advantage?
-How do we show advantage of curation tools?
-    Timing?
-
----
+# Using 2D slice instance seg GT
 
 Curate a single timepoint fully
 Every time you train a new classifier, try a new instance seg, or do *anything* upstream of segmentation you should compute the SEG score against this result.
@@ -595,7 +574,38 @@ These are specific t and z slices.
 
 OK! Now you've added post-process blurring before instance segmentation, and you're computing the SEG score on each annotated 2D slice! You're also saving the size distribution... The size dist is greatly improved by blurring, because we remove the tiny, shitty cells. But that doesn't necessarily mean it will improve the seg score. Especially since SEG doesn't punish for the many small false positives in the unblurred result.
 
-# img007
+# Full workflow description
+
+Now I've got a new workflow. I can easily try out new ideas without having to git commit them push and pull them! Great news.
+
+Wed May  9 11:28:01 2018
+
+0. Upscale with ISONET
+1. Annotate a few well spaced slices throughout your dataset using as many classes as necessary
+    - Make sure that your annotations are usable as 2D instance seg ground truth
+2. *Quickly* train a model on these slices and predict throughout the rest of the volume. Don't optimize the model.
+3. Curate the results pixelwise by hand.
+    Q. Is this actually faster than simply hand-drawing every slice?
+    Q. Or is the rough model only useful for nhl-style ground truth generated via spimagine curation?
+    NOTE: We should curate the retina nuclei in the same way as ISBI then propose to add it as ISBI tracking challenge data!
+4. Now optimize your models thoroughly against instance seg and tracking on this ground truth!
+
+NOTE: The ground truth curation part of this workflow may only be useful for this type of data. ie data with O(10) nuclei|cells per slice. And relatively large nuclei s.t. you save time by only drawing on the boundaries.
+
+# [problem] isonet prediction doesn't look good
+
+Thu May 10 20:00:00 2018
+
+I trained on timepoint 3 and predicted on 4 from img006, but the results don't look good.
+The XY slices look strangely grainy.
+The YZ slices don't show cells at all.
+
+- I can ask Uwe for help.
+- I can look at code.
+- I can run through the orig example notebooks
+- Ignore, don't use ISONET for now.
+
+# img007 and img008
 
 We've added a new biological problem to this project!
 img007 was `141029Ath5LAP2b-GFP_bactin-rasmKate2_view1_Subset_cell1-1.tif`
@@ -616,18 +626,56 @@ We *would* learn.
     - shape during division
     - time required for division
     - time between divisions
-    - division asymmetry stuff. 
+    - division asymmetry stuff.
 
 Stuff to do:
 We now have to train using the old labeled data but excluding the nuclear channel
 We only have the nuclear envelope label in this mosaic mode.
 We moved a promoter that activates GFP-tagged nuclear-envelope-associated-protein in neurons just after their creation during asymmetric division.
 
+- [ ] Retrain on prev gt using only nuc env signal
+
+
+# goals / todo until finish: img006 project
+
+What is there left to do until the project is finished?
+
+**The goal is to segment and track all the nuclei in a single full retina development**
+Novelty
+    First automatic segmentation and tracking in this tissue.
+    First time we've had statistics good enough to ... ?
+    Novel method for separating densely packed nuclei instances?
+    Division and dying-cell annotations
+    First time explicit dividing-cell object class used in tracking model
+    Using manual annotation to correct chromatic aberration?
+
+note: It has been tried before, without luck.
+
+Using ISONET, U-net, slice annotations, 3D watershed, division annotations, custom views we can solve the problem.
+
+Right now the segmentation works only poorly. It proposes 130 objects per image including
+    at least 4 oversegmented blobs with 5 or 6 cells per blob
+    at least 30 small objects that are not nuclei, but might be pieces of nuclei
+
+- [ ] Show that segmentation can separate densely packed nuclei in z
+- [ ] Take time to go over solution w curation tools until you have 1000 trajectories
+But this doesn't show the comparative advantage of the new tech!
+Once we have the correct solution as GT, then we can show the comparative advantage?
+How do we show advantage of curation tools?
+    Timing?
+
+# goals / todo until finished: img007 project
+
+**The goal of project img007 is to segment and track enough nuclei to correlate shape and movement information**
+
+Novelty
+    First correlation between nuclei shape and movement in this tissue
+    Distinguish between pushing / pulling models of movement
+    First automatic segmentation and tracking in this tissue?
 
 
 
-
-# good ideas
+# good ideas | todo
 
 For segmentation based on watershed we have a few options.
 U-net
