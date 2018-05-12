@@ -8,6 +8,9 @@ import json
 import random
 from pathlib import Path
 
+from ipython_defaults import perm
+import lib as ll
+
 from keras.activations import softmax
 from keras.models import Model
 from keras.layers import Convolution2D
@@ -281,3 +284,32 @@ def batch_generator_patches_aug(X, Y,
 
         if epoch==1 and savepath is not None:
             np.savez(savepath / 'XY_train', x=np.array(Xepoch), y=np.array(Yepoch))
+
+def batch_generator_pred_zchannel(X,
+                        # steps_per_epoch=100,
+                        axes='ZCYX',
+                        batch_size=4,
+                        patch_apply=lambda x,y:(x,y),
+                        verbose=False,
+                        savepath=None):
+
+    "no shuffle. no epochs. no augment, but still apply arbitrary funcs."
+
+    batchnum = 0
+
+    dz = 2
+    zmax = X.shape[0]+dz
+    pad = [(dz,dz)] + [(0,0)]*3
+    X = np.pad(X, pad, 'reflect')
+    current_idx = dz
+    
+    while current_idx < zmax:
+        i0 = current_idx
+        i1 = min(current_idx + batch_size, zmax)
+        print(i0,i1)
+        Xbatch = np.stack([ll.add_z_to_chan(X,i,dz) for i in range(i0,i1)])
+
+        current_idx += batch_size
+        batchnum += 1
+
+        yield Xbatch

@@ -1,3 +1,5 @@
+# %load_ext autoreload
+# %autoreload 2
 from ipython_remote_defaults import *
 
 from keras.optimizers import Adam, SGD
@@ -12,11 +14,11 @@ from segtools import segtools_simple as ss
 from scipy.ndimage.filters import convolve
 
 
-QUICK = False
+QUICK = False #True
 
 ## note: all paths are relative to project home directory
-mypath = Path("training/t017/")
-mypath.mkdir(exist_ok=False)
+mypath = Path("training/t018/")
+mypath.mkdir(exist_ok=True)
 myfile = Path(__file__)
 print(mypath / myfile.name)
 shutil.copy(myfile, mypath / 'train_and_seg.py')
@@ -25,18 +27,23 @@ sys.stderr = open(mypath / 'stderr.txt', 'w')
 
 ## load data
 img = imread('data/img006.tif')
-imglut = imread('data/labels_lut.tif')
-img_w_labs = np.concatenate([imglut[:,:,[0]], img], axis=2)
-inds_lab, traindata = ll.fixlabels(img_w_labs)
+lab = imread('data/labels_lut.tif')
+lab = lab[:,:,0]
+lab = ll.condense_labels(lab)
+mask_train_slices = lab.max((2,3)) > 0
+ys = lab[mask_train_slices].copy()
+xs = ll.labeled_slices_to_xsys(img, mask_train_slices, axes="TZCYX")
 
-## arrange into xs and ys
-xs_xy = traindata[:,[1,2]].copy()
-ys_xy = traindata[:,0].copy()
-xs = perm(xs_xy,'zcyx','zyxc')
-ys = ys_xy
+# np.savez(mypath / 'traindat', xs=xs, ys=ys)
+np.savez(mypath / 'traindat_small', xs=xs[::50], ys=ys[::50])
+
+sys.exit(0)
+
+print(xs.shape,ys.shape,mask_train_slices.shape)
 
 # define classweights
-n_classes = len(np.unique(ys))
+n_channels = xs.shape[-1]
+n_classes  = len(np.unique(ys))
 classweights = [1/n_classes,]*n_classes
 
 # convert ys to categorical
@@ -91,7 +98,7 @@ xs_vali  = xs[-n_vali:]
 ys_vali  = ys[-n_vali:]
 
 net = unet.get_unet_n_pool(n_pool=2,
-                            inputchan=2,
+                            inputchan=n_channels,
                             n_classes=n_classes,
                             n_convolutions_first_layer=32,
                             dropout_fraction=0.2)
@@ -135,10 +142,13 @@ def random_augmentation_xy(xpatch, ypatch, train=True):
 batchsize = 3
 stepsperepoch = xs_train.shape[0] // batchsize
 validationsteps = xs_vali.shape[0] // batchsize
+
+f_trainaug = lambda x,y:random_augmentation_xy(x,y,train=False)
+
 bgen = unet.batch_generator_patches_aug(xs_train, ys_train,
-                                  # steps_per_epoch=100, 
+                                  # steps_per_epoch=100,
                                   batch_size=batchsize,
-                                  augment_and_norm=random_augmentation_xy,
+                                  augment_and_norm=f_trainaug,
                                   savepath=mypath)
 
 
@@ -172,9 +182,13 @@ def plot_hist_key(k):
 plot_hist_key('loss')
 plot_hist_key('acc')
 
+## reqd: img, QUICK, 
+
+
+
 ## Predictions!
 
-x = perm(img,"tzcyx","tzyxc")
+x = perm(img,"tzcyx","tzcyx")
 a,b,c,d,e = x.shape
 if QUICK:
   x = x[[9],:b//4] # downsize for QUICK testing
@@ -183,8 +197,15 @@ a,b,c,d,e = x.shape
 x = x.reshape((a*b,c,d,e))
 x = x/x.mean((1,2), keepdims=True)
 x.shape
-pimg = net.predict(x)
-pimg = pimg.reshape((a,b,c,d,n_classes))
+pgen = unet.batch_generator_pred_zchannel(x, batch_size=1)
+x3 = np.stack([x2 for x2 in pgen])
+x3 = x3[:,0]
+# pimg = net.predict_generator(pgen, steps=x.shape[0], verbose=1)
+pimg = net.predict(x3)
+pimg = pimg.astype(np.float16)
+pimg = pimg[np.newaxis,...]
+a,b,c,d,e = pimg.shape
+# pimg = pimg.reshape((a,b,c,d,pimg.shape[-1]))
 np.save(mypath / 'pimg', pimg)
 
 ## max division channel across z
@@ -197,23 +218,27 @@ def find_divisions():
   x = pimg[:,:,:,:,:]
   a,b,c,d,e = x.shape
   x = x.reshape((a,b,c,d,e))
-  div = x[:,::6,...,4].sum((2,3))
+  dz = 6 ## downsample z
+  div = x[:,::dz,...,4].sum((2,3))
 
-  dc = np.sort(div.flat)
-  ndivs = min(20, dc.shape[0])
+  val_thresh = np.percentile(div.flat, 95)
 
-  nrows = 7
-  tz = np.argwhere(div > dc)[:nrows]
+  n_rows_max = 7 
+  tz = np.argwhere(div > val_thresh)[:n_rows_max]
 
+  n_cols = 7 ## n columns
   lst = list(range(x.shape[0]))
-  x2 = x[:,::6]
-  x2 = np.array([x2[timewindow(lst, n[0], nrows), n[1]] for n in tz])
+  x2 = x[:,::dz]
+  x2 = np.array([x2[timewindow(lst, n[0], n_cols), n[1]] for n in tz])
   a,b,c,d,e = x2.shape
   x2.shape
   x2 = perm(x2,'12yxc','1y2xc')
   a,b,c,d,e = x2.shape
   x2 = x2.reshape((a*b,c*d,e))
-  io.imsave(mypath / 'find_divisions.png', x2[::4,::4,[4,1,2]])
+  x2 = x2[::4,::4,[4,1,2]]
+  x2[...,0] *= 40 ## enhance division channel color!
+  x2 = np.clip(x2, 0, 1)
+  io.imsave(mypath / 'find_divisions.png', x2)
 
 find_divisions()
 
@@ -224,6 +249,7 @@ if QUICK:
 
 ## compute instance segmentation statistics
 
+BLUR = False
 if BLUR:
   weights = np.full((3, 3, 3), 1.0/27)
   pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
@@ -237,13 +263,14 @@ def f(x):
   x1 = x[...,1] # nuclei
   x2 = x[...,2] # borders
   mask = (x1 > 0.5) #& (x2 < 0.15)
-  res  = watershed(1-x1,label(x1>0.9)[0], mask = mask)
+  res  = watershed(1-x1,label(x1>0.8)[0], mask = mask)
   # res = label(mask)[0]
   return res
 hyp = np.array([f(x) for x in pimg])
-mask = inds_lab!=0
-# mask = mask[0]
-y_pred_instance = hyp[mask]
+hyp = hyp.astype(np.uint16)
+np.save(mypath / 'hyp', hyp)
+
+y_pred_instance = hyp[mask_train_slices]
 
 def f(x):
   x[x!=1] = 0
@@ -255,19 +282,17 @@ res = [ss.seg(x,y) for x,y in zip(y_gt_instance, y_pred_instance)]
 print({'mean' : np.mean(res), 'std' : np.std(res)}, file=open(mypath / 'SEG.txt', 'w'))
 
 nhls = seglib.labs2nhls(hyp, img[:,:,1], simple=False)
+pickle.dump(nhls, open(mypath / 'nhls.pkl', 'wb'))
 
 plt.figure()
 cm = sns.cubehelix_palette(len(nhls))
 for i,nhl in enumerate(nhls):
   areas = [n['area'] for n in nhl]
   areas = np.log2(sorted(areas))
-  plt.plot(areas, c=cm[i])
+  plt.plot(areas, '.', c=cm[i])
 plt.savefig(mypath / 'cell_sizes.pdf')
 
 #hi coleman! keep coding!
 #best, romina :)
-
-
-
 
 

@@ -3,6 +3,7 @@ import re
 import pandas
 from segtools import lib as seglib
 from scipy.ndimage import label
+from ipython_defaults import perm
 
 def autocorr(x):
     result = np.correlate(x, x, mode='full')
@@ -58,6 +59,7 @@ def getxyslice(iss):
   ss[-1] = slice(x0,x1)
   return ss
 
+@DeprecationWarning
 def fixlabels(imgWlab):
   """
   Interesting numpy trivia.
@@ -74,6 +76,39 @@ def fixlabels(imgWlab):
   x[x==85] = 4  # divisions
   x0[:,0] = x
   return inds, x0
+
+def labeled_slices_to_xsys(img, mask, axes="TZCYX"):
+  """
+  mask is 2D over T and Z channels
+  return slices from img only where labeling exists
+  add a few of the surrounding planes to the channels dimension of xs
+  """
+  assert mask.ndim == 2
+  img = perm(img, axes, "TZCYX")
+  dz = 2
+  pad = [(0,0)] + [(dz,dz)] + [(0,0)]*3
+  inds = np.indices(mask.shape)
+  xs = []
+  imgpad = np.pad(img, pad, 'reflect')
+  for t,z in inds[:,mask].T:
+    xs.append(add_z_to_chan(imgpad[t],z+dz,dz))
+  xs = np.array(xs) # results in "XYXC"
+  return xs
+
+def add_z_to_chan(X, i, dz, axes="ZCYX"):
+    x2 = X[i-dz:i+dz+1]
+    a,b,c,d = x2.shape
+    x2 = x2.reshape((a*b,c,d))
+    x2 = perm(x2, "cyx", "yxc")
+    return x2
+
+def condense_labels(lab):
+  lab[lab==0] = 2   # background
+  lab[lab==255] = 0 # nuclear membrane
+  lab[lab==168] = 1 # nucleus
+  lab[lab==198] = 3 # unknown
+  lab[lab==85] = 4  # divisions
+  return lab
 
 def labels2nhl(lab):
   lab[lab!=1] = 2
@@ -110,3 +145,5 @@ def tilez(img, ncols=8, ds=1):
           ss = [sy,sx,slice(None)]
       res[ss] = img[i]
   return res
+
+
