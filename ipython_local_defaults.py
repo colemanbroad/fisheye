@@ -34,6 +34,11 @@ def qopen():
   print(res)
   return np.load('qsave.npy')
 
+def sync(name):
+  res = run(['rsync efal:training/{0}/*.png training/{0}/'.format(name)], shell=True)
+  res = run(['rsync efal:training/{0}/SEG.txt training/{0}/'.format(name)], shell=True)
+  print(res)
+
 def updateall(w,lab):
   for i in range(lab.shape[0]):
     spima.update_spim(w,i,lab[i])
@@ -62,8 +67,7 @@ def onclick_centerpoints(event):
     newcents.append([zi,yi,xi])
 # cid = iss.fig.canvas.mpl_connect('button_press_event', onclick_centerpoints)
 
-def imshownew(img,**kwargs):
-  plt.figure()
-  return plt.imshow(img, **kwargs)
+
+
 
 
