@@ -59,3 +59,5 @@ def ensure_exists(dir):
     os.makedirs(dir)
   except FileExistsError as e:
     print(e)
+
+flatten = lambda l: [item for sublist in l for item in sublist]

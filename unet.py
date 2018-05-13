@@ -289,6 +289,7 @@ def batch_generator_pred_zchannel(X,
                         # steps_per_epoch=100,
                         axes='ZCYX',
                         batch_size=4,
+                        dz=0,
                         patch_apply=lambda x,y:(x,y),
                         verbose=False,
                         savepath=None):
@@ -297,7 +298,6 @@ def batch_generator_pred_zchannel(X,
 
     batchnum = 0
 
-    dz = 2
     zmax = X.shape[0]+dz
     pad = [(dz,dz)] + [(0,0)]*3
     X = np.pad(X, pad, 'reflect')
