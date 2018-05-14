@@ -31,7 +31,7 @@ print('Channels in / out:\t\t', n_channel_in, '/', n_channel_out)
 plt.figure(figsize=(10,4))
 plot_some(X_val[:5],Y_val[:5])
 plt.suptitle('5 example validation patches (top row: source, bottom row: target)')
-plt.savefig('c.png')
+plt.savefig('pngs/c.png')
 
 config = Config(data_axes, n_channel_in, n_channel_out, train_steps_per_epoch=25)
 print(config)
@@ -58,6 +58,6 @@ plt.suptitle('5 example validation patches\n'       +
              'middle row: target (ground truth),  ' +
              'bottom row: predicted from source')
 plt.tight_layout()
-plt.savefig('d.png')
+plt.savefig('pngs/d.png')
 
 model.export_TF()

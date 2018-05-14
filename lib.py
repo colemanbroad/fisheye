@@ -3,7 +3,7 @@ import re
 import pandas
 from segtools import lib as seglib
 from scipy.ndimage import label
-from ipython_defaults import perm, flatten
+from ipython_defaults import perm, flatten, merg, splt, collapse
 
 def autocorr(x):
     result = np.correlate(x, x, mode='full')
@@ -77,6 +77,7 @@ def fixlabels(imgWlab):
   x0[:,0] = x
   return inds, x0
 
+@DeprecationWarning
 def labeled_slices_to_xsys(img, mask, dz=0, axes="TZCYX"):
   """
   mask is 2D over T and Z channels
@@ -94,92 +95,33 @@ def labeled_slices_to_xsys(img, mask, dz=0, axes="TZCYX"):
   xs = np.array(xs) # results in "XYXC"
   return xs
 
-def add_z_to_chan(X, i, dz, axes="ZCYX"):
-    x2 = X[i-dz:i+dz+1]
-    a,b,c,d = x2.shape
-    x2 = x2.reshape((a*b,c,d))
-    x2 = perm(x2, "cyx", "yxc")
-    return x2
+def add_z_to_chan(img, dz, ind=None, axes="ZCYX"):
+    assert img.ndim == 4
 
-def collapse(arr, axes=[[0,2],[1,3]]):
-  sh = arr.shape
-  perm = flatten(axes)
-  arr = arr.transpose(perm)
-  newshape = [np.prod([sh[i] for i in ax]) for ax in axes]
-  arr = arr.reshape(newshape)
-  return arr
+    ## by default do the entire stack
+    if ind is None:
+      ind = np.arange(img.shape[0])
 
-def merg(arr, ax=0):
-  "given a list of axes, merge each one with it's successor."
-  if type(ax) is list:
-    assert all(ax[i] <= ax[i+1] for i in range(len(ax)-1))
-    for i,axis in zip(range(100),ax):
-      arr = merg(arr, axis-i)
-  else: # int type  
-    assert ax < arr.ndim-1
-    sh = list(arr.shape)
-    n = sh[ax]
-    del sh[ax]
-    sh[ax] *= n
-    arr = arr.reshape(sh)
-  return arr
+    ## pad img
+    img = perm(img, axes, "ZCYX")
+    pad = [(dz,dz)] + [(0,0)]*3
+    img = np.pad(img, pad, 'reflect')
 
-def splt(arr, s1=10, ax=0):
-  """
-  split an array into more dimensions
-  takes a list of split values and a list of axes and divides each axis into two new axes,
-  where the first has a length given by the split value (which must by an even divisor of the original axis length)
-  res = arange(200).reshape((2,100))
-  res = splt(res, 5, 1)
-  res.shape == (4,5,20)
+    ## allow single ind
+    if not hasattr(ind, "__len__"):
+      ind = [ind]
 
-  res = arange(3*5*7*11).reshape((3*5,7*11))
-  res = splt(res, [3,7],[0,1])
-  res.shape == (3,5,7,11)
+    def add_single(i):
+      res = img[i-dz:i+dz+1]
+      a,b,c,d = res.shape
+      res = res.reshape((a*b,c,d))
+      res = perm(res, "CYX", "YXC")
+      return res
 
-  you can even list the same dimension multiple times
-  res = arange(3*5*7*11).reshape((3*5*7,11))
-  res = splt(res, [3,5],[0,0])
-  res.shape == (3,5,7,11)
-  """
-  sh = list(arr.shape)
-  if type(s1) is list and type(ax) is list:
-    assert all(ax[i] <= ax[i+1] for i in range(len(ax)-1))
-    for i,spl,axis in zip(range(100),s1, ax):
-      arr = splt(arr, spl, axis+i)
-  elif type(s1) is int and type(ax) is int:
-    s2,r = divmod(sh[ax], s1)
-    assert r == 0
-    sh[ax] = s2
-    sh.insert(ax, s1)
-    arr = arr.reshape(sh)
-  return arr
+    ind = np.array(ind) + dz
+    res = np.stack([add_single(i) for i in ind], axis=0)
 
-def multicat(lst):
-  if type(lst[0]) is list:
-    # type of list is list of list of...
-    # apply recursively to each element. then apply to result.
-    # apply recursively to every element except last
-    res = [multicat(l) for l in lst[:-1]] + [lst[-1]]
-    res = multicat(res)
-  else:
-    # lst is list of ndarrays. return an ndarray.
-    res = np.concatenate(lst[:-1], axis=lst[-1])
-  return res
-
-def multistack(lst):
-  if type(lst[0]) is list:
-    # type of list is list of list of...
-    # apply recursively to each element. then apply to result.
-    # apply recursively to every element except last
-    res = [multistack(l) for l in lst[:-1]] + [lst[-1]]
-    res = multistack(res)
-  # elif type(lst[0]) is int:
-  #   # lst is list of ndarrays. return an ndarray.
-  #   res = np.stack(lst[:-1], axis=lst[-1])
-  else:
-    res = np.stack(lst[:-1], axis=lst[-1])
-  return res
+    return res
 
 @DeprecationWarning
 def merge_into_cols(*args, n=10):
