@@ -54,8 +54,8 @@ raw_data = datagen.get_tiff_pairs_from_folders (
 )
 
 psf_aniso = imread('data/psf_aniso_NA_0.8.tif')
-# psf_channels = np.stack([psf_aniso,]*2, axis=1)
-psf_channels  = psf_aniso[:,np.newaxis]
+psf_channels = np.stack([psf_aniso,]*2, axis=1)
+# psf_channels  = psf_aniso[:,np.newaxis]
 iso_transform = datagen.anisotropic_distortions(
     subsample = subsample,
     # psf       = None, 
