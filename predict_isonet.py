@@ -34,13 +34,13 @@ print('subsample factor =', subsample)
 
 plt.figure(figsize=(15,15))
 plot_some(np.moveaxis(x,1,-1)[[5,-5]], title_list=[['xy slice', 'xy slice']], pmin=2,pmax=99.8);
-plt.savefig('ex.png')
+plt.savefig('ex1.png')
 
 plt.figure(figsize=(15,15))
 plot_some(np.moveaxis(np.moveaxis(x,1,-1)[:,[50,-50]],1,0), title_list=[['xz slice','xz slice']], pmin=2,pmax=99.8, aspect=subsample);
-plt.savefig('ex.png')
+plt.savefig('ex2.png')
 
-model = IsotropicCARE(config=None, name='my_model_old')
+model = IsotropicCARE(config=None, name='my_model')
 model.load_weights()
 
 normalizer = PercentileNormalizer(1,99.8)
@@ -48,6 +48,7 @@ resizer = PadAndCropResizer()
 
 restored = model.predict(x, axes, subsample, normalizer, resizer)
 np.save('restored', restored)
+np.save('restored_small', restored)
 
 print('input  (%s) = %s' % (axes, str(x.shape)))
 print('output (%s) = %s' % (axes, str(restored.shape)))

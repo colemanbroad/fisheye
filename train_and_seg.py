@@ -11,13 +11,16 @@ import lib as ll
 import augmentation
 from segtools import lib as seglib
 from segtools import segtools_simple as ss
+from segtools import plotting
 from scipy.ndimage.filters import convolve
 
 ## boolean params for control flow
-TRAIN = True
-PREDICT = True
-ANALYZE = True
-RERUN = not (TRAIN and PREDICT and ANALYZE)
+TRAIN = False
+PREDICT = False
+PIMG_ANALYSIS = False
+INSTANCE_SEG = True
+INSTANCE_ANALYSIS = False
+RERUN = not TRAIN  # and PREDICT and PIMG_ANALYSIS and INSTANCE_ANALYSIS)
 QUICK = False
 
 ## boolean model params
@@ -64,7 +67,12 @@ unet_params = {
   'dropout_fraction' : 0.2,
 }
 
-json.dump(unet_params, open(mypath / 'unet_params.json', 'w'))
+# set to None to redo optimization
+watershed_params = 0.466, 0.99 #None #0.53, 0.99 # None
+
+if TRAIN:
+  json.dump(unet_params, open(mypath / 'unet_params.json', 'w'))
+  net = unet.get_unet_n_pool(**unet_params)
 
 def condense_labels(lab):
   lab[lab==0]   = ch_bg
@@ -79,13 +87,14 @@ img = imread('data/img006.tif')
 lab = imread('data/labels_lut.tif')
 lab = lab[:,:,0]
 lab = condense_labels(lab)
-mask_train_slices = lab.min((2,3)) < 2
-inds_train_slices = np.indices(mask_train_slices.shape)[:,mask_train_slices]
+## TODO: this will break once we start labeling XZ and YZ in same volume.
+mask_labeled_slices = lab.min((2,3)) < 2
+inds_labeled_slices = np.indices(mask_labeled_slices.shape)[:,mask_labeled_slices]
 
 def split_train_vali():
-  ys = lab[mask_train_slices].copy()
+  ys = lab[mask_labeled_slices].copy()
   xs = []
-  for t,z in inds_train_slices.T:
+  for t,z in inds_labeled_slices.T:
     res = ll.add_z_to_chan(img[t], dz, ind=z)
     xs.append(res[0])
   xs = np.array(xs)
@@ -116,7 +125,7 @@ def split_train_vali():
     ys = ys*distimg[...,np.newaxis]
     ys = ys / ys.mean((1,2,3), keepdims=True)
 
-  print(xs.shape,ys.shape,mask_train_slices.shape)
+  print(xs.shape,ys.shape,mask_labeled_slices.shape)
   print(ys.max((0,1,2)))
 
   ## normalize
@@ -141,9 +150,6 @@ def split_train_vali():
   ys_vali  = ys[-n_vali:]
   return xs_train, xs_vali, ys_train, ys_vali
 
-if TRAIN:
-  xs_train, xs_vali, ys_train, ys_vali = split_train_vali()
-
 def show_trainvali():
   sx = [slice(None,5), Ellipsis, rgbxs]
   sy = [slice(None,5), Ellipsis, rgbmem]
@@ -164,12 +170,6 @@ def show_trainvali():
   res = merg(res, 0) #[[0,1],[2],[3]])
   return res
 
-if TRAIN:
-  res = show_trainvali()
-  io.imsave(mypath / 'train_vali_ex.png', res)
-
-net = unet.get_unet_n_pool(**unet_params)
-
 def compile_and_callbacks():
   optim = Adam(lr=1e-4)
   loss  = unet.my_categorical_crossentropy(weights=classweights, itd=4)
@@ -180,9 +180,6 @@ def compile_and_callbacks():
   reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
   callbacks = [checkpointer, earlystopper, reduce_lr]
   return callbacks
-
-if TRAIN:
-  callbacks = compile_and_callbacks()
 
 def random_augmentation_xy(xpatch, ypatch, train=True):
   if random.random()<0.5:
@@ -241,11 +238,7 @@ def train():
 
   net.save_weights(mypath / 'w002.h5')
   return history
-
-if TRAIN:
-  history = train()
-  print(history.history, file=open(mypath / 'history.txt','w'))
-
+  
 def plot_hist_key(k):
   plt.figure()
   y1 = history.history[k]
@@ -255,26 +248,27 @@ def plot_hist_key(k):
   plt.legend()
   plt.savefig(mypath / (k + '.png'))
 
-if TRAIN:
-  plot_hist_key('loss')
-  plot_hist_key('acc')
-
-## load best weights from previous training
-
-net.load_weights(mypath / 'w001.h5')
-
-## Predict on Train and Vali
-
 def predict_train_vali():
   pred_xs_train = net.predict(xs_train)
   res = collapse(splt(pred_xs_train[:64,...,rgbmem],8,0), [[0,2],[1,3],[4]])
   io.imsave(mypath / 'pred_xs_train.png', res)
   pred_xs_vali = net.predict(xs_vali)
   res = collapse(splt(pred_xs_vali[...,rgbmem],4,0), [[0,2],[1,3],[4]])
-  io.imsave(mypath / 'pred_xs_vali.png', res)
+  return res
 
 if TRAIN:
-  predict_train_vali()
+  xs_train, xs_vali, ys_train, ys_vali = split_train_vali()
+  res = show_trainvali()
+  io.imsave(mypath / 'train_vali_ex.png', res)
+  callbacks = compile_and_callbacks()
+  history = train()
+  print(history.history, file=open(mypath / 'history.txt','w'))
+  plot_hist_key('loss')
+  plot_hist_key('acc')
+  ## load best weights from previous training
+  net.load_weights(mypath / 'w001.h5')
+  res = predict_train_vali()
+  io.imsave(mypath / 'pred_xs_vali.png', res)
 
 ## Predictions on full dataset!
 
@@ -298,19 +292,13 @@ if PREDICT:
   pimg = predict_on_new()
   np.save(mypath / 'pimg', pimg)
 
-if not ANALYZE:
-  sys.exit(0)
-
-if not PREDICT:
-  pimg = np.load(mypath / 'pimg.npy')
-
 def showresults():
-  x = img[mask_train_slices].transpose((0,2,3,1))[...,rgbimg]
+  x = img[mask_labeled_slices].transpose((0,2,3,1))[...,rgbimg]
   x[...,2] = 0 # remove blue
-  y = lab[mask_train_slices]
+  y = lab[mask_labeled_slices]
   y = np_utils.to_categorical(y).reshape(y.shape + (-1,))
   y = y[...,rgbmem]
-  z = pimg[mask_train_slices][...,rgbmem]
+  z = pimg[mask_labeled_slices][...,rgbmem]
   ss = [slice(None,None,5), slice(None,None,4), slice(None,None,4), slice(None)]
   def f(r):
     r = merg(r[ss])
@@ -320,15 +308,6 @@ def showresults():
   x,y,z = f(x), f(y), f(z)
   res = np.concatenate([x,y,z], axis=1)
   return res
-
-res = showresults()
-io.imsave(mypath / 'results.png', res)
-
-## max division channel across z
-
-np.save(mypath / 'max_z_divchan', pimg[:,...,ch_div].max(1))
-
-## find divisions
 
 def find_divisions():
   x = pimg.astype(np.float32)
@@ -345,17 +324,20 @@ def find_divisions():
   # x2 = np.clip(x2, 0, 1)
   return x2
 
-res = find_divisions()
-io.imsave(mypath / 'find_divisions.png', res)
+if PIMG_ANALYSIS:
+  pimg = np.load(mypath / 'pimg.npy')
+  res = showresults()
+  io.imsave(mypath / 'results.png', res)
+  ## max division channel across z
+  np.save(mypath / 'max_z_divchan', pimg[:,...,ch_div].max(1))
+  res = find_divisions()
+  io.imsave(mypath / 'find_divisions.png', res)
 
-## quit early if QUICK
+## compute instance segmentation statistics  
 
-if QUICK:
-  sys.exit(0)
-
-## compute instance segmentation statistics
-
-if blur:
+def convolve_zyx(pimg, axes="tzyxc"):
+  assert pimg.ndim == 5
+  pimg = perm(pimg, axes, "tzyxc")
   weights = np.full((3, 3, 3), 1.0/27)
   pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
   pimg = np.array(pimg)
@@ -363,57 +345,126 @@ if blur:
   pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
   pimg = np.array(pimg)
   pimg = pimg.transpose((0,2,3,4,1))
-
-def instance_seg(x):
-  x1 = x[...,ch_nuc] # nuclei
-  x2 = x[...,ch_mem] # borders
-  poten = 1 - x1 - x2
-  mask = (x1 > 0.5) & (x2 < 0.15)
-  seed = (x1 > 0.8) & (x2 < 0.1)
-  res  = watershed(poten, label(seed)[0], mask=mask)
-  return res
-hyp = np.array([instance_seg(x) for x in pimg])
-hyp = hyp.astype(np.uint16)
-np.save(mypath / 'hyp', hyp)
-# hyp = np.load(mypath / 'hyp.npy')
-
-
-img_instseg = perm(img[[0]], "tzcyx", "tzyxc")
-img_instseg = img_instseg / img_instseg.mean((1,2,3), keepdims=True)
-def instance_seg(x):
-  x1 = x[...,ch_nuc_img] # nuclei
-  poten = 1 - x1 # - x2
-  mask = (x1 > 0.5) #& (x2 < 0.15)
-  seed = (x1 > 0.8) #& (x2 < 0.1)
-  res  = watershed(poten, label(seed)[0], mask=mask)
-  return res
-hyp = np.array([instance_seg(x) for x in img_instseg])
-hyp = hyp.astype(np.uint16)
-np.save(mypath / 'hyp', hyp)
-# hyp = np.load(mypath / 'hyp.npy')
-
-inds = inds_train_slices[:,:-4]
-y_pred_instance = hyp[inds[0], inds[1]]
+  return pimg
 
 def lab2instance(x):
   x[x!=1] = 0
   x = label(x)[0]
   return x
-y_gt_instance = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
 
-res = [ss.seg(x,y) for x,y in zip(y_gt_instance, y_pred_instance)]
-print({'mean' : np.mean(res), 'std' : np.std(res)}, file=open(mypath / 'SEG.txt', 'w'))
+def instance_seg_pimg_stack(x, nuc_mask=0.5, nuc_seed=0.8, mem_mask=0.3, mem_seed=0.1):
+  x1 = x[...,ch_nuc] # nuclei
+  x2 = x[...,ch_mem] # borders
+  poten = 1 - x1 #- x2
+  mask = (x1 > nuc_mask) # & (x2 < mem_mask)
+  seed = (x1 > nuc_seed) # & (x2 < mem_seed)
+  res  = watershed(poten, label(seed)[0], mask=mask)
+  return res
 
-nhls = seglib.labs2nhls(hyp, img[:,:,1], simple=False)
-pickle.dump(nhls, open(mypath / 'nhls.pkl', 'wb'))
+def optimize_watershed(img_instseg):
+  res_list = []
+  time_list = []
+  n = 10
+  l1_list = np.linspace(0.2, .8, n)
+  l2_list = np.linspace(0.9, .99, n)
+  inds = inds_labeled_slices[:,:-4] # only use first timepoint
+  y_gt_instance = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
 
-plt.figure()
-cm = sns.cubehelix_palette(len(nhls))
-for i,nhl in enumerate(nhls):
-  areas = [n['area'] for n in nhl]
-  areas = np.log2(sorted(areas))
-  plt.plot(areas, '.', c=cm[i])
-plt.savefig(mypath / 'cell_sizes.pdf')
+  for l1,l2 in itertools.product(l1_list, l2_list):
+    print('Evaluating params:',l1,l2)
+    t0 = time()
+    hyp = np.array([instance_seg_pimg_stack(x, nuc_mask=l1, nuc_seed=l2) for x in img_instseg])
+    hyp = hyp.astype(np.uint16)
+    y_pred_instance = hyp[inds[0], inds[1]]
+    res = np.array([ss.seg(x,y) for x,y in zip(y_gt_instance, y_pred_instance)])
+    t1 = time()
+    res_list.append(res)
+    time_list.append(t1-t0)
+
+  res_list = np.array(res_list)
+  res_list = res_list.reshape((n,n,-1))
+  resmean = res_list.mean(-1)
+
+  plt.figure()
+  plt.imshow(resmean)
+  plt.xticks(np.arange(n), np.around(l2_list, 2), rotation=45)
+  plt.yticks(np.arange(n), np.around(l1_list, 2))
+  plt.xlabel('seed threshold')
+  plt.ylabel('mask threshold')
+  plt.colorbar()
+  plt.savefig(mypath / 'mean.png')
+
+  json.dump({'l1_list':l1_list,'l2_list':l2_list}, (mypath / 'params.json').open(mode='w'), cls=NumpyEncoder)
+
+  print("Avg Time Taken: ", np.mean(time_list))
+
+  idx = np.argwhere(resmean==resmean.max())
+  idx = idx[0] # take first, there should only be one optimum
+  l1opt, l2opt, val = l1_list[idx[0]], l2_list[idx[1]], resmean[idx[0], idx[1]]
+  res = {'l1opt':l1opt, 'l2opt':l2opt, 'seg':val}
+  json.dump(res, open(mypath / 'SEG_opt.json', 'w'))
+
+  print("number of optima:", len(idx))
+  print("Optimal Params are:", l1opt, l2opt)
+  print("Optimal SEG value is:", val)
+  return l1opt, l2opt
+
+if INSTANCE_SEG:
+  pimg = np.load(mypath / 'pimg.npy')
+  if blur:
+    pimg = convolve_zyx(pimg)
+  
+  if watershed_params is None:
+    img_instseg = pimg[[0]]
+    print("BEGIN WATERSHED OPTIMIZATION")
+    wp = optimize_watershed(img_instseg)
+  else:
+    wp = watershed_params
+
+  print("COMPARE INSTANCE SEGMENTATION AGAINST SLICES")
+  hyp = np.array([instance_seg_pimg_stack(x, nuc_mask=wp[0], nuc_seed=wp[1]) for x in pimg])
+  hyp = hyp.astype(np.uint16)
+  np.save(mypath / 'hyp', hyp)
+  inds = inds_labeled_slices # use full
+  y_gt_instance = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  y_pred_instance = hyp[inds[0], inds[1]]
+  seg_scores = np.array([ss.seg(x,y) for x,y in zip(y_gt_instance, y_pred_instance)])
+  print({'seg': seg_scores.mean(), 'std':seg_scores.std()}, file=open(mypath / 'SEG.txt','w'))
+  img_labeled_slices = img[inds[0], inds[1]]
+  
+  print("CREATE DISPLAY GRID OF SEGMENTATION RESULTS")
+  gspec = matplotlib.gridspec.GridSpec(4, 4)
+  gspec.update(wspace=0., hspace=0.)
+  fig = plt.figure()
+  ids = np.arange(img_labeled_slices.shape[0])
+  # np.random.shuffle(ids)
+  ids = np.concatenate([ids[:24:2],ids[-4:]])
+  for i in range(16):
+    ax = plt.subplot(gspec[i])
+    im1 = img_labeled_slices[ids[i],ch_nuc_img,]
+    im2 = y_pred_instance[ids[i]]
+    im3 = y_gt_instance[ids[i]]
+    ax = plotting.make_comparison_image(im1,im2,im3,ax=ax)
+    # res.append(ax.get_array())
+    ax.set_axis_off()
+  fig.set_size_inches(10, 10, forward=True)
+  plt.savefig(mypath / 'seg_overlay.png',dpi=200, bbox_inches='tight')
+
+if INSTANCE_ANALYSIS:
+  hyp = np.load(mypath / 'hyp.npy')
+  ## look at cell shape statistics
+  print("GENERATE NHLS FROM HYP AND ANALYZE")
+  nhls = seglib.labs2nhls(hyp, img[:,:,ch_nuc_img], simple=False)
+  pickle.dump(nhls, open(mypath / 'nhls.pkl', 'wb'))
+
+  plt.figure()
+  cm = sns.cubehelix_palette(len(nhls))
+  for i,nhl in enumerate(nhls):
+    areas = [n['area'] for n in nhl]
+    areas = np.log2(sorted(areas))
+    plt.plot(areas, '.', c=cm[i])
+  plt.savefig(mypath / 'cell_sizes.pdf')
+
 
 #hi coleman! keep coding!
 #best, romina :)

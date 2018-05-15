@@ -10,6 +10,8 @@ import json
 import pickle
 import random
 import re
+import itertools
+from time import time
 
 ## python 3 only
 from pathlib import Path
@@ -151,6 +153,8 @@ def multistack(lst):
     res = np.stack(lst[:-1], axis=lst[-1])
   return res
 
-
-
-      
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
