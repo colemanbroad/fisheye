@@ -12,10 +12,13 @@ from csbdeep.models import Config, IsotropicCARE
 from csbdeep.tf import limit_gpu_memory
 from csbdeep.plot_utils import plot_some
 
-sys.stdout = open('training_iso_stdout.txt', 'w')
-sys.stderr = open('training_iso_stderr.txt', 'w')
+mypath = Path('isonet')
+mypath.mkdir(exist_ok=True)
 
-(X,Y), (X_val,Y_val), data_axes = load_data('my_training_data.npz', validation_split=0.1)
+sys.stdout = open(mypath / 'train_stdout.txt', 'w')
+sys.stderr = open(mypath / 'train_stderr.txt', 'w')
+
+(X,Y), (X_val,Y_val), data_axes = load_data(mypath / 'my_training_data.npz', validation_split=0.1)
 ax = axes_dict(data_axes)
 
 n_train, n_val = len(X), len(X_val)
@@ -31,13 +34,13 @@ print('Channels in / out:\t\t', n_channel_in, '/', n_channel_out)
 plt.figure(figsize=(10,4))
 plot_some(X_val[:5],Y_val[:5])
 plt.suptitle('5 example validation patches (top row: source, bottom row: target)')
-plt.savefig('pngs/c.png')
+plt.savefig(mypath / 'train_1.png')
 
 config = Config(data_axes, n_channel_in, n_channel_out, train_steps_per_epoch=25)
 print(config)
 vars(config)
 
-model = IsotropicCARE(config, 'my_model')
+model = IsotropicCARE(config, str(mypath / 'my_model'))
 
 history = model.train(X,Y, validation_data=(X_val,Y_val))
 
@@ -45,6 +48,7 @@ from csbdeep.plot_utils import plot_history
 print(sorted(list(history.history.keys())))
 plt.figure(figsize=(16,5))
 plot_history(history,['loss','val_loss'],['mse','val_mse','mae','val_mae']);
+plt.savefig(mypath / 'train_history.png')
 
 model.load_weights() # load best weights according to validation loss
 
@@ -58,6 +62,6 @@ plt.suptitle('5 example validation patches\n'       +
              'middle row: target (ground truth),  ' +
              'bottom row: predicted from source')
 plt.tight_layout()
-plt.savefig('pngs/d.png')
+plt.savefig(mypath / 'train_2.png')
 
 model.export_TF()

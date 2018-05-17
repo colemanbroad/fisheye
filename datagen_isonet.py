@@ -18,7 +18,8 @@ from scipy.ndimage import rotate
 # )
 
 # x = imread('raw_data/retina/cropped_farred_RFP_GFP_2109175_2color_sub_10.20.tif')
-x = imread('data/img006.tif')
+# x = imread('data/img006_noconv.tif')
+x = np.load('data/img006_noconv.npy')
 
 # with TiffFile('data/img006.tif') as tif:
 #     images = tif.asarray()
@@ -27,6 +28,9 @@ x = imread('data/img006.tif')
 #             t = tag.name, tag.value
 #             print(t)
 #         image = page.asarray()
+
+mypath = Path('isonet')
+mypath.mkdir(exist_ok=True)
 
 x = x[3]
 axes = 'ZCYX'
@@ -39,19 +43,25 @@ plt.switch_backend('agg')
 
 plt.figure(figsize=(15,15))
 plot_some(np.moveaxis(x,1,-1)[[5,-5]], title_list=[['xy slice','xy slice']], pmin=2,pmax=99.8);
-plt.savefig('pngs/a.png')
+plt.savefig(mypath / 'datagen_1.png')
 
 plt.figure(figsize=(15,15))
 plot_some(np.moveaxis(np.moveaxis(x,1,-1)[:,[50,-50]],1,0), title_list=[['xz slice','xz slice']], pmin=2,pmax=99.8, aspect=subsample);
-plt.savefig('pngs/b.png')
+plt.savefig(mypath / 'datagen_2.png')
 
 
-raw_data = datagen.get_tiff_pairs_from_folders (
-    basepath    = 'data',
-    source_dirs = ['isonet'],
-    target_dir  = 'isonet',
-    axes        = axes,
-)
+from csbdeep.datagen import RawData
+def gimmeit_gen():
+    yield x,x,axes,None
+
+raw_data = RawData(gimmeit_gen, 1, "this is great!")
+
+# raw_data = datagen.get_tiff_pairs_from_folders (
+#     basepath    = 'data',
+#     source_dirs = ['isonet'],
+#     target_dir  = 'isonet',
+#     axes        = axes,
+# )
 
 psf_aniso = imread('data/psf_aniso_NA_0.8.tif')
 psf_channels = np.stack([psf_aniso,]*2, axis=1)
@@ -83,7 +93,7 @@ assert X.shape == Y.shape
 print("shape of X,Y =", X.shape)
 print("axes  of X,Y =", XY_axes)
 
-np.savez('my_training_data.npz', X=X, Y=Y, axes=XY_axes)
+np.savez(mypath / 'my_training_data.npz', X=X, Y=Y, axes=XY_axes)
 
 from csbdeep.plot_utils import plot_some
 
@@ -91,6 +101,6 @@ for i in range(2):
     plt.figure(figsize=(16,4))
     sl = slice(8*i, 8*(i+1))
     plot_some(np.moveaxis(X[sl],1,-1),np.moveaxis(Y[sl],1,-1),title_list=[np.arange(sl.start,sl.stop)])
-    plt.savefig('pngs/panel_{}.png'.format(i))
+    plt.savefig(mypath / 'datagen_panel_{}.png'.format(i))
 
 
