@@ -13,6 +13,7 @@ from segtools import lib as seglib
 from segtools import segtools_simple as ss
 from segtools import plotting
 from scipy.ndimage.filters import convolve
+import stack_segmentation as stackseg
 
 ## boolean params for control flow
 TRAIN = False
@@ -28,7 +29,8 @@ border_weights = True
 blur = False
 
 ## note: all paths are relative to project home directory
-mypath = Path("training/t039/")
+
+mypath = Path(sys.argv[1])
 mypath.mkdir(exist_ok=RERUN)
 if not run_from_ipython():
   myfile = Path(__file__)
@@ -49,7 +51,7 @@ rgbimg = [ch_mem_img, ch_nuc_img, ch_nuc_img]
 rgbxs  = [ch_mem_xs, ch_nuc_xs, ch_nuc_xs]
 
 ## define classes
-n_classes  = 4
+n_classes = 4
 ch_div = 3
 ch_nuc = 1
 ch_mem = 0
@@ -68,7 +70,11 @@ unet_params = {
 }
 
 # set to None to redo optimization
-watershed_params = 0.466, 0.99 #None #0.53, 0.99 # None
+segmentation_params = None #0.466, 0.99 # None #0.53, 0.99 # None
+# f_seg = lambda x,l1,l2 : instance_seg_pimg_stack(x, nuc_mask=l1, nuc_seed=l2)
+segmentation_info = {'name':'flat_thresh_two_chan', 'param0':'nuc_mask', 'param1':'mem_mask'}
+stack_segmentation_function = lambda x,p : stackseg.flat_thresh_two_chan(x, nuc_mask=p[0], mem_mask=p[1])
+
 
 if TRAIN:
   json.dump(unet_params, open(mypath / 'unet_params.json', 'w'))
@@ -352,98 +358,129 @@ def lab2instance(x):
   x = label(x)[0]
   return x
 
-def instance_seg_pimg_stack(x, nuc_mask=0.5, nuc_seed=0.8, mem_mask=0.3, mem_seed=0.1):
-  x1 = x[...,ch_nuc] # nuclei
-  x2 = x[...,ch_mem] # borders
-  poten = 1 - x1 #- x2
-  mask = (x1 > nuc_mask) # & (x2 < mem_mask)
-  seed = (x1 > nuc_seed) # & (x2 < mem_seed)
-  res  = watershed(poten, label(seed)[0], mask=mask)
-  return res
+def optimize(pimg):
 
-def optimize_watershed(img_instseg):
+  ## optimization params
   res_list = []
   time_list = []
   n = 10
-  l1_list = np.linspace(0.2, .8, n)
-  l2_list = np.linspace(0.9, .99, n)
-  inds = inds_labeled_slices[:,:-4] # only use first timepoint
-  y_gt_instance = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  # ps = np.random.rand(100,2)
+  # ps[:,0] = 0.3 + 0.4*ps[:,0]
+  # ps[:,1] = 0.0 + 0.06*ps[:,1]
+  # l1_list = np.linspace(0.3, .7, n) + np.random.rand(n)*(.4/20)
+  # l2_list = np.linspace(0.0, .06, n) + np.random.rand(n)*(0.06/20)
+  # l1_list = ps[:,0]
+  # l2_list = ps[:,1]
+  
+  ps = np.indices((n,n))
+  ps = ps + np.random.rand(2,n,n)*0.5
+  ps = ps.reshape((2,-1))
+  ps[0] = 0.3 + 0.4 *ps[0]/n
+  ps[1] = 0.0 + 0.07*ps[1]/n
+  l1_list = ps[0]
+  l2_list = ps[1]
 
-  for l1,l2 in itertools.product(l1_list, l2_list):
+  def risk(params):
+    img_instseg = pimg[[0]]
+    l1, l2 = params
+    inds = inds_labeled_slices[:,:-4] # only use first timepoint
+    gt_slices = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
     print('Evaluating params:',l1,l2)
     t0 = time()
-    hyp = np.array([instance_seg_pimg_stack(x, nuc_mask=l1, nuc_seed=l2) for x in img_instseg])
+    hyp = np.array([stack_segmentation_function(x,(l1,l2)) for x in img_instseg])
     hyp = hyp.astype(np.uint16)
-    y_pred_instance = hyp[inds[0], inds[1]]
-    res = np.array([ss.seg(x,y) for x,y in zip(y_gt_instance, y_pred_instance)])
+    pred_slices = hyp[inds[0], inds[1]]
+    res = np.array([ss.seg(x,y) for x,y in zip(gt_slices, pred_slices)])
+    # res = np.arange(10)
     t1 = time()
     res_list.append(res)
     time_list.append(t1-t0)
+    val = res.mean()
+    return val
+
+  for p in ps.T:
+    val = risk(p)
+    print("Params, Val: ", p, val)
 
   res_list = np.array(res_list)
   res_list = res_list.reshape((n,n,-1))
-  resmean = res_list.mean(-1)
+  resmean  = res_list.mean(-1)
 
-  plt.figure()
-  plt.imshow(resmean)
-  plt.xticks(np.arange(n), np.around(l2_list, 2), rotation=45)
-  plt.yticks(np.arange(n), np.around(l1_list, 2))
-  plt.xlabel('seed threshold')
-  plt.ylabel('mask threshold')
-  plt.colorbar()
-  plt.savefig(mypath / 'mean.png')
-
-  json.dump({'l1_list':l1_list,'l2_list':l2_list}, (mypath / 'params.json').open(mode='w'), cls=NumpyEncoder)
+  def save_img():
+    plt.figure()
+    # plt.imshow(resmean)
+    # plt.s
+    # plt.xticks(np.arange(n), np.around(l2_list, 2), rotation=45)
+    # plt.yticks(np.arange(n), np.around(l1_list, 2))
+    plt.scatter(ps[0], ps[1], c=resmean.flat)
+    n = segmentation_info['name']
+    p0 = segmentation_info['param0']
+    p1 = segmentation_info['param1']
+    plt.title(n)
+    plt.xlabel(p0)
+    plt.ylabel(p1)
+    plt.colorbar()
+    filename = '_'.join([n,p0,p1])
+    plt.savefig(mypath / (filename + '.png'))
+  save_img()
 
   print("Avg Time Taken: ", np.mean(time_list))
 
   idx = np.argwhere(resmean==resmean.max())
   idx = idx[0] # take first, there should only be one optimum
-  l1opt, l2opt, val = l1_list[idx[0]], l2_list[idx[1]], resmean[idx[0], idx[1]]
-  res = {'l1opt':l1opt, 'l2opt':l2opt, 'seg':val}
-  json.dump(res, open(mypath / 'SEG_opt.json', 'w'))
+  l1opt, l2opt, val_opt = l1_list[idx[0]], l2_list[idx[1]], resmean[idx[0], idx[1]]
 
   print("number of optima:", len(idx))
-  print("Optimal Params are:", l1opt, l2opt)
-  print("Optimal SEG value is:", val)
+
+  results = dict()
+  results['params'] = ps
+  results['values'] = resmean
+  results['optimal_params'] = (l1opt, l2opt)
+  results['optimal_value'] = val_opt
+  print(results)
+  print(results, file=open(mypath / 'optimization.txt', 'w'))
+
+
   return l1opt, l2opt
+
 
 if INSTANCE_SEG:
   pimg = np.load(mypath / 'pimg.npy')
+
   if blur:
     pimg = convolve_zyx(pimg)
-  
-  if watershed_params is None:
-    img_instseg = pimg[[0]]
-    print("BEGIN WATERSHED OPTIMIZATION")
-    wp = optimize_watershed(img_instseg)
-  else:
-    wp = watershed_params
 
-  print("COMPARE INSTANCE SEGMENTATION AGAINST SLICES")
-  hyp = np.array([instance_seg_pimg_stack(x, nuc_mask=wp[0], nuc_seed=wp[1]) for x in pimg])
+  if segmentation_params is None:
+    print("BEGIN SEGMENTATION OPTIMIZATION")
+    wp = optimize(pimg)
+  else:
+    wp = segmentation_params
+
+  print("COMPUTE FINAL SEGMENTATION")
+  hyp = np.array([stack_segmentation_function(x, wp) for x in pimg])
   hyp = hyp.astype(np.uint16)
   np.save(mypath / 'hyp', hyp)
-  inds = inds_labeled_slices # use full
-  y_gt_instance = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
-  y_pred_instance = hyp[inds[0], inds[1]]
-  seg_scores = np.array([ss.seg(x,y) for x,y in zip(y_gt_instance, y_pred_instance)])
+
+  print("COMPARE SEGMENTATION AGAINST LABELED SLICES")
+  inds = inds_labeled_slices[:,:-4] # use full
+  gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  pre_slices = hyp[inds[0], inds[1]]
+  seg_scores = np.array([ss.seg(x,y) for x,y in zip(gt_slices, pre_slices)])
   print({'seg': seg_scores.mean(), 'std':seg_scores.std()}, file=open(mypath / 'SEG.txt','w'))
-  img_labeled_slices = img[inds[0], inds[1]]
   
   print("CREATE DISPLAY GRID OF SEGMENTATION RESULTS")
+  img_slices = img[inds[0], inds[1]]
   gspec = matplotlib.gridspec.GridSpec(4, 4)
   gspec.update(wspace=0., hspace=0.)
   fig = plt.figure()
-  ids = np.arange(img_labeled_slices.shape[0])
+  ids = np.arange(img_slices.shape[0])
   # np.random.shuffle(ids)
   ids = np.concatenate([ids[:24:2],ids[-4:]])
   for i in range(16):
     ax = plt.subplot(gspec[i])
-    im1 = img_labeled_slices[ids[i],ch_nuc_img,]
-    im2 = y_pred_instance[ids[i]]
-    im3 = y_gt_instance[ids[i]]
+    im1 = img_slices[ids[i],ch_nuc_img,]
+    im2 = pre_slices[ids[i]]
+    im3 = gt_slices[ids[i]]
     ax = plotting.make_comparison_image(im1,im2,im3,ax=ax)
     # res.append(ax.get_array())
     ax.set_axis_off()
