@@ -158,3 +158,14 @@ class NumpyEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return json.JSONEncoder.default(self, obj)
+
+def add_numbered_directory(path, base):
+  s = re.compile(base + r"(\d{3})")
+  def f(dir):
+    m = s.search(dir)
+    return int(m.groups()[0])
+  maxdir  = max([f(d) for d in os.listdir(path) if s.search(d)])
+  newpath = str(path) + '/' + base + '{:03d}'.format(maxdir + 1)
+  newpath = Path(newpath)
+  newpath.mkdir(exist_ok=False)
+  return newpath

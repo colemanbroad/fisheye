@@ -14,18 +14,22 @@ from segtools import segtools_simple as ss
 from segtools import plotting
 from scipy.ndimage.filters import convolve
 import stack_segmentation as stackseg
+import hyperopt
+from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
+from hyperopt import base as hopt_base
+from hyperopt.plotting import main_plot_histogram, main_plot_history, main_plot_vars
 
 ## boolean params for control flow
-TRAIN = False
-PREDICT = False
-PIMG_ANALYSIS = False
+TRAIN = True
+PREDICT = True
+PIMG_ANALYSIS = True
 INSTANCE_SEG = True
-INSTANCE_ANALYSIS = False
+INSTANCE_ANALYSIS = True
 RERUN = not TRAIN  # and PREDICT and PIMG_ANALYSIS and INSTANCE_ANALYSIS)
 QUICK = False
 
 ## boolean model params
-border_weights = True
+border_weights = False
 blur = False
 
 ## note: all paths are relative to project home directory
@@ -40,8 +44,9 @@ if not run_from_ipython():
   sys.stdout = open(mypath / 'stdout.txt', 'w')
   sys.stderr = open(mypath / 'stderr.txt', 'w')
 
+
 ## define input channels
-dz = 2
+dz = 4
 n_channels = 2*(1+2*dz)
 ch_mem_xs = 2*dz # original, centered membrane channel
 ch_nuc_xs = 2*dz + 1
@@ -51,12 +56,13 @@ rgbimg = [ch_mem_img, ch_nuc_img, ch_nuc_img]
 rgbxs  = [ch_mem_xs, ch_nuc_xs, ch_nuc_xs]
 
 ## define classes
-n_classes = 4
+n_classes = 5
 ch_div = 3
 ch_nuc = 1
 ch_mem = 0
 ch_bg  = 2
 ch_ignore = 1
+ch_distance = 4
 rgbmem = [ch_mem, ch_nuc, ch_bg]
 rgbdiv = [ch_div, ch_nuc, ch_bg]
 classweights = [1/n_classes,]*n_classes
@@ -70,11 +76,22 @@ unet_params = {
 }
 
 # set to None to redo optimization
-segmentation_params = None #0.466, 0.99 # None #0.53, 0.99 # None
-# f_seg = lambda x,l1,l2 : instance_seg_pimg_stack(x, nuc_mask=l1, nuc_seed=l2)
-segmentation_info = {'name':'flat_thresh_two_chan', 'param0':'nuc_mask', 'param1':'mem_mask'}
-stack_segmentation_function = lambda x,p : stackseg.flat_thresh_two_chan(x, nuc_mask=p[0], mem_mask=p[1])
+segmentation_params = {'nuc_mask':0.51, 'nuc_seed':0.99, 'compactness':0.5}
+# segmentation_params = None
 
+## if segmentation_params is Noene then optimize this space
+segmentation_space = {'nuc_mask' :hp.uniform('nuc_mask', 0.3, 0.7),
+                       'nuc_seed':hp.uniform('nuc_seed', 0.9, 1.0),
+                       'mem_mask':hp.uniform('mem_mask', 0.0, 0.3),
+                       'mem_seed':hp.uniform('mem_seed', 0.0, 0.3),
+                       'compactness' : 0, #hp.uniform('compactness', 0, 10),
+                       'connectivity': 1, #hp.choice('connectivity', [1,2,3]),
+                       }
+segmentation_info   = {'name':'watershed_two_chan', 'param0':'mem_mask', 'param1':'mem_seed'}
+
+stack_segmentation_function = lambda x,p : stackseg.watershed_two_chan(x, **p)
+if INSTANCE_SEG and segmentation_params is not None and not run_from_ipython():
+  mypath_opt = add_numbered_directory(mypath, 'opt')
 
 if TRAIN:
   json.dump(unet_params, open(mypath / 'unet_params.json', 'w'))
@@ -361,87 +378,120 @@ def lab2instance(x):
 def optimize(pimg):
 
   ## optimization params
-  res_list = []
-  time_list = []
-  n = 10
-  # ps = np.random.rand(100,2)
-  # ps[:,0] = 0.3 + 0.4*ps[:,0]
-  # ps[:,1] = 0.0 + 0.06*ps[:,1]
-  # l1_list = np.linspace(0.3, .7, n) + np.random.rand(n)*(.4/20)
-  # l2_list = np.linspace(0.0, .06, n) + np.random.rand(n)*(0.06/20)
-  # l1_list = ps[:,0]
-  # l2_list = ps[:,1]
   
-  ps = np.indices((n,n))
-  ps = ps + np.random.rand(2,n,n)*0.5
-  ps = ps.reshape((2,-1))
-  ps[0] = 0.3 + 0.4 *ps[0]/n
-  ps[1] = 0.0 + 0.07*ps[1]/n
-  l1_list = ps[0]
-  l2_list = ps[1]
-
   def risk(params):
     img_instseg = pimg[[0]]
-    l1, l2 = params
     inds = inds_labeled_slices[:,:-4] # only use first timepoint
     gt_slices = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
-    print('Evaluating params:',l1,l2)
+    print('Evaluating params:',params)
     t0 = time()
-    hyp = np.array([stack_segmentation_function(x,(l1,l2)) for x in img_instseg])
+    hyp = np.array([stack_segmentation_function(x,params) for x in img_instseg])
     hyp = hyp.astype(np.uint16)
     pred_slices = hyp[inds[0], inds[1]]
     res = np.array([ss.seg(x,y) for x,y in zip(gt_slices, pred_slices)])
-    # res = np.arange(10)
     t1 = time()
-    res_list.append(res)
-    time_list.append(t1-t0)
     val = res.mean()
-    return val
+    return -val
 
-  for p in ps.T:
-    val = risk(p)
-    print("Params, Val: ", p, val)
+  ## perform the optimization
 
-  res_list = np.array(res_list)
-  res_list = res_list.reshape((n,n,-1))
-  resmean  = res_list.mean(-1)
+  trials = Trials()
+  best = fmin(risk,
+      space=segmentation_space,
+      algo=tpe.suggest,
+      max_evals=100,
+      trials=trials)
+
+  pickle.dump(trials, open(mypath_opt / 'trials.pkl', 'wb'))
+  print(best)
+
+  losses = [x['loss'] for x in trials.results if x['status']=='ok']
+  df = pd.DataFrame({**trials.vals})
+  df = df.iloc[:len(losses)]
+  df['loss'] = losses
+
+  ## save the results
 
   def save_img():
     plt.figure()
-    # plt.imshow(resmean)
-    # plt.s
-    # plt.xticks(np.arange(n), np.around(l2_list, 2), rotation=45)
-    # plt.yticks(np.arange(n), np.around(l1_list, 2))
-    plt.scatter(ps[0], ps[1], c=resmean.flat)
+    # plt.scatter(ps[0], ps[1], c=values)
     n = segmentation_info['name']
     p0 = segmentation_info['param0']
     p1 = segmentation_info['param1']
+    x = np.array(trials.vals[p0])
+    y = np.array(trials.vals[p1])
+    c = np.array([t['loss'] for t in trials.results if t.get('loss',None) is not None])
+    plt.scatter(x[:c.shape[0]],y[:c.shape[0]],c=c)
     plt.title(n)
     plt.xlabel(p0)
     plt.ylabel(p1)
     plt.colorbar()
     filename = '_'.join([n,p0,p1])
-    plt.savefig(mypath / (filename + '.png'))
+    plt.savefig(mypath_opt / (filename + '.png'))
   save_img()
 
-  print("Avg Time Taken: ", np.mean(time_list))
+  plt.figure()
+  main_plot_histogram(trials=trials)
+  plt.savefig(mypath_opt / 'hypopt_histogram.pdf')
 
-  idx = np.argwhere(resmean==resmean.max())
-  idx = idx[0] # take first, there should only be one optimum
-  l1opt, l2opt, val_opt = l1_list[idx[0]], l2_list[idx[1]], resmean[idx[0], idx[1]]
+  plt.figure()
+  main_plot_history(trials=trials)
+  plt.savefig(mypath_opt / 'hypopt_history.pdf')
 
-  print("number of optima:", len(idx))
+  domain = hopt_base.Domain(risk, segmentation_space)
 
-  results = dict()
-  results['params'] = ps
-  results['values'] = resmean
-  results['optimal_params'] = (l1opt, l2opt)
-  results['optimal_value'] = val_opt
-  print(results)
-  print(results, file=open(mypath / 'optimization.txt', 'w'))
+  plt.figure()
+  main_plot_vars(trials=trials, bandit=domain)
+  plt.tight_layout()
+  plt.savefig(mypath_opt / 'hypopt_vars.pdf')
 
+  plt.figure()
+  g = sns.PairGrid(df) #, hue="connectivity")
+  # def hist(x, **kwargs):
+  #   plt.hist(x, stacked=True, **kwargs)
+  g.map_diag(plt.hist)
+  g.map_upper(plt.scatter)
+  g.map_lower(sns.kdeplot, cmap="Blues_d")
+  # g.map(plt.scatter)
+  g.add_legend();
+  plt.savefig(mypath_opt / 'hypopt_seaborn_004.pdf')
 
-  return l1opt, l2opt
+  if False:
+    plt.figure()
+    ax = plt.subplot(gspec[0])
+    sns.swarmplot(x='connectivity', y='loss', data=df, ax=ax)
+    ax = plt.subplot(gspec[1])
+    sns.swarmplot(x='nuc_mask', y='loss', data=df, ax=ax)
+    ax = plt.subplot(gspec[2])
+    sns.swarmplot(x='nuc_seed', y='loss', data=df, ax=ax)
+    ax = plt.subplot(gspec[3])
+    sns.swarmplot(x='compactness', y='loss', data=df, ax=ax)  
+    plt.savefig(mypath_opt / 'hypopt_seaborn_005.pdf')
+
+    fig = plt.figure(figsize=(16,4))
+    gspec = matplotlib.gridspec.GridSpec(1,4) #, width_ratios=[3,1])
+    # gspec.update(wspace=1, hspace=1)
+    cmap = np.array(sns.color_palette('deep'))
+    conn = df.connectivity.as_matrix()
+    colors = cmap[conn.flat].reshape(conn.shape + (3,))
+    ax0 = plt.subplot(gspec[0])
+    ax0.scatter(df["compactness"], df.loss, c=colors)
+    plt.ylabel('loss')
+
+    ax1 = plt.subplot(gspec[1], sharey=ax0)
+    ax1.scatter(df["nuc_mask"], df.loss, c=colors)
+    plt.setp(ax1.get_yticklabels(), visible=False)
+
+    ax2 = plt.subplot(gspec[2], sharey=ax0)
+    ax2.scatter(df["nuc_seed"], df.loss, c=colors)
+    plt.setp(ax2.get_yticklabels(), visible=False)
+    
+    ax3 = plt.subplot(gspec[3])
+    sns.swarmplot(x="connectivity", y="loss", data=df, ax=ax3)
+    plt.setp(ax3.get_yticklabels(), visible=False)
+    plt.savefig(mypath_opt / 'hypopt_seaborn_006.pdf')
+
+  return best['vals']
 
 
 if INSTANCE_SEG:
@@ -452,12 +502,12 @@ if INSTANCE_SEG:
 
   if segmentation_params is None:
     print("BEGIN SEGMENTATION OPTIMIZATION")
-    wp = optimize(pimg)
+    params = optimize(pimg)
   else:
-    wp = segmentation_params
+    params = segmentation_params
 
   print("COMPUTE FINAL SEGMENTATION")
-  hyp = np.array([stack_segmentation_function(x, wp) for x in pimg])
+  hyp = np.array([stack_segmentation_function(x, params) for x in pimg])
   hyp = hyp.astype(np.uint16)
   np.save(mypath / 'hyp', hyp)
 
