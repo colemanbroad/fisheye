@@ -164,8 +164,9 @@ def add_numbered_directory(path, base):
   def f(dir):
     m = s.search(dir)
     return int(m.groups()[0])
-  maxdir  = max([f(d) for d in os.listdir(path) if s.search(d)])
-  newpath = str(path) + '/' + base + '{:03d}'.format(maxdir + 1)
+  drs = [f(d) for d in os.listdir(path) if s.search(d)]
+  new_number = 0 if len(drs)==0 else max(drs) + 1
+  newpath = str(path) + '/' + base + '{:03d}'.format(new_number)
   newpath = Path(newpath)
   newpath.mkdir(exist_ok=False)
   return newpath

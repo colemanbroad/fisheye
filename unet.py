@@ -71,10 +71,14 @@ def my_categorical_crossentropy(weights=(1., 1.), itd=1, BEnd=K):
     log  = BEnd.log
     summ = BEnd.sum
     eps  = K.epsilon()
+    if itd==0:
+        ss = [slice(None), slice(None), slice(None), slice(None)]
+    else:
+        ss = [slice(None), slice(itd,-itd), slice(itd,-itd), slice(None)]
     def catcross(y_true, y_pred):
         ## only use the valid part of the result! as if we had only made valid convolutions
-        yt = y_true[:,itd:-itd,itd:-itd,:]
-        yp = y_pred[:,itd:-itd,itd:-itd,:]
+        yt = y_true[ss]
+        yp = y_pred[ss]
         # if mask:
         #     weights = y_true[...,0]
         #     y_true  = y_true[...,[1,2,3]]

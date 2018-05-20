@@ -6,47 +6,43 @@ from keras.optimizers import Adam, SGD
 from keras.utils import np_utils
 from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStopping, TensorBoard, ReduceLROnPlateau
 
-import unet
-import lib as ll
-import augmentation
 from segtools import lib as seglib
 from segtools import segtools_simple as ss
 from segtools import plotting
 from scipy.ndimage.filters import convolve
-import stack_segmentation as stackseg
 import hyperopt
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from hyperopt import base as hopt_base
 from hyperopt.plotting import main_plot_histogram, main_plot_history, main_plot_vars
 
+homedir = Path('/projects/project-broaddus/fisheye/')
+sys.path.insert(0, str(homedir))
+
+import unet
+import lib as ll
+import augmentation
+import stack_segmentation as stackseg
+
 ## boolean params for control flow
 TRAIN = True
-PREDICT = True
+PREDICT = False
 PIMG_ANALYSIS = True
 INSTANCE_SEG = True
 INSTANCE_ANALYSIS = True
 RERUN = not TRAIN  # and PREDICT and PIMG_ANALYSIS and INSTANCE_ANALYSIS)
-QUICK = False
 
 ## boolean model params
-border_weights = False
+border_weights = True
+dist_channel = False
 blur = False
 
 ## note: all paths are relative to project home directory
 
 mypath = Path(sys.argv[1])
-mypath.mkdir(exist_ok=RERUN)
-if not run_from_ipython():
-  myfile = Path(__file__)
-  print(mypath / myfile.name)
-  if not RERUN:
-    shutil.copy(myfile, mypath / 'train_and_seg.py')
-  sys.stdout = open(mypath / 'stdout.txt', 'w')
-  sys.stderr = open(mypath / 'stderr.txt', 'w')
-
+print("MYPATH:", mypath)
 
 ## define input channels
-dz = 4
+dz = 0
 n_channels = 2*(1+2*dz)
 ch_mem_xs = 2*dz # original, centered membrane channel
 ch_nuc_xs = 2*dz + 1
@@ -56,29 +52,32 @@ rgbimg = [ch_mem_img, ch_nuc_img, ch_nuc_img]
 rgbxs  = [ch_mem_xs, ch_nuc_xs, ch_nuc_xs]
 
 ## define classes
-n_classes = 5
+n_classes = 4 ## DISTANCE REGRESSION
 ch_div = 3
 ch_nuc = 1
 ch_mem = 0
 ch_bg  = 2
 ch_ignore = 1
-ch_distance = 4
+# ch_distance = 4
 rgbmem = [ch_mem, ch_nuc, ch_bg]
 rgbdiv = [ch_div, ch_nuc, ch_bg]
 classweights = [1/n_classes,]*n_classes
 
 unet_params = {
-  'n_pool' : 3,
+  'n_pool' : 2,
   'inputchan' : n_channels,
   'n_classes' : n_classes,
-  'n_convolutions_first_layer' : 64,
+  'n_convolutions_first_layer' : 32,
   'dropout_fraction' : 0.2,
 }
+n_evals = 100
+batchsize = 3
+
 
 # set to None to redo optimization
-segmentation_params = {'nuc_mask':0.51, 'nuc_seed':0.99, 'compactness':0.5}
-# segmentation_params = None
-
+segmentation_params = {'nuc_mask':0.51, 'nuc_seed':0.98}
+segmentation_params = None
+n_evals = 100
 ## if segmentation_params is Noene then optimize this space
 segmentation_space = {'nuc_mask' :hp.uniform('nuc_mask', 0.3, 0.7),
                        'nuc_seed':hp.uniform('nuc_seed', 0.9, 1.0),
@@ -90,11 +89,13 @@ segmentation_space = {'nuc_mask' :hp.uniform('nuc_mask', 0.3, 0.7),
 segmentation_info   = {'name':'watershed_two_chan', 'param0':'mem_mask', 'param1':'mem_seed'}
 
 stack_segmentation_function = lambda x,p : stackseg.watershed_two_chan(x, **p)
-if INSTANCE_SEG and segmentation_params is not None and not run_from_ipython():
-  mypath_opt = add_numbered_directory(mypath, 'opt')
 
 if TRAIN:
   json.dump(unet_params, open(mypath / 'unet_params.json', 'w'))
+  net = unet.get_unet_n_pool(**unet_params)
+
+if PREDICT:
+  unet_params = json.load(open(mypath / 'unet_params.json', 'r'))
   net = unet.get_unet_n_pool(**unet_params)
 
 def condense_labels(lab):
@@ -106,13 +107,19 @@ def condense_labels(lab):
   return lab
 
 ## load data
-img = imread('data/img006.tif')
-lab = imread('data/labels_lut.tif')
+img = imread(str(homedir / 'data/img006.tif'))
+# img = np.load(str(homedir / 'data/img006_noconv.npy'))
+lab = imread(str(homedir / 'data/labels_lut.tif'))
 lab = lab[:,:,0]
 lab = condense_labels(lab)
 ## TODO: this will break once we start labeling XZ and YZ in same volume.
 mask_labeled_slices = lab.min((2,3)) < 2
 inds_labeled_slices = np.indices(mask_labeled_slices.shape)[:,mask_labeled_slices]
+def lab2instance(x):
+  x[x!=1] = 0
+  x = label(x)[0]
+  return x
+gt_slices = np.array([lab2instance(x) for x in lab[inds_labeled_slices[0], inds_labeled_slices[1]]])
 
 def split_train_vali():
   ys = lab[mask_labeled_slices].copy()
@@ -148,7 +155,19 @@ def split_train_vali():
     ys = ys*distimg[...,np.newaxis]
     ys = ys / ys.mean((1,2,3), keepdims=True)
 
-  print(xs.shape,ys.shape,mask_labeled_slices.shape)
+  if dist_channel:
+    a,b,c,d = ys.shape
+    mask = ys[...,ch_mem]==1
+    distimg = ~mask
+    distimg = np.array([distance_transform_edt(d) for d in distimg])
+    # distimg = np.exp(-distimg/10)
+    mask = ys[...,ch_bg]==1
+    distimg[mask] *= -1
+    # distimg = distimg/distimg.mean((1,2), keepdims=True)
+    ys = distimg[...,np.newaxis]
+    # ys = ys / ys.mean((1,2,3), keepdims=True)
+
+  print(xs.shape, ys.shape, mask_labeled_slices.shape)
   print(ys.max((0,1,2)))
 
   ## normalize
@@ -160,9 +179,6 @@ def split_train_vali():
   invers = np.argsort(np.arange(inds.shape[0])[inds])
   xs = xs[inds]
   ys = ys[inds]
-  if QUICK:
-    xs = xs[:7*6]
-    ys = ys[:7*6]
 
   ## train vali split
   split = 5
@@ -195,7 +211,7 @@ def show_trainvali():
 
 def compile_and_callbacks():
   optim = Adam(lr=1e-4)
-  loss  = unet.my_categorical_crossentropy(weights=classweights, itd=4)
+  loss  = unet.my_categorical_crossentropy(weights=classweights, itd=0)
   net.compile(optimizer=optim, loss=loss, metrics=['accuracy'])
 
   checkpointer = ModelCheckpoint(filepath=str(mypath / "w001.h5"), verbose=0, save_best_only=True, save_weights_only=True)
@@ -231,7 +247,6 @@ def random_augmentation_xy(xpatch, ypatch, train=True):
   return xpatch, ypatch
 
 def train():
-  batchsize = 3
   stepsperepoch   = xs_train.shape[0] // batchsize
   validationsteps = xs_vali.shape[0] // batchsize
 
@@ -253,7 +268,7 @@ def train():
 
   history = net.fit_generator(bgen,
                     steps_per_epoch=stepsperepoch,
-                    epochs=20,
+                    epochs=n_epochs,
                     verbose=1,
                     callbacks=callbacks,
                     validation_data=vgen,
@@ -261,7 +276,7 @@ def train():
 
   net.save_weights(mypath / 'w002.h5')
   return history
-  
+
 def plot_hist_key(k):
   plt.figure()
   y1 = history.history[k]
@@ -298,10 +313,9 @@ if TRAIN:
 def predict_on_new():
   # x = perm(img,"tzcyx","tzcyx")
   res = []
-  for t in range(img.shape[0]):
+  ntimes = img.shape[0]
+  for t in range(ntimes):
     x = img[t]
-    if QUICK:
-      x = x[[9],:b//4] # downsize for QUICK testing
     x = ll.add_z_to_chan(x, dz, axes="ZCYX")
     x = x / x.mean((1,2), keepdims=True)
     pimg = net.predict(x)
@@ -316,12 +330,13 @@ if PREDICT:
   np.save(mypath / 'pimg', pimg)
 
 def showresults():
-  x = img[mask_labeled_slices].transpose((0,2,3,1))[...,rgbimg]
+  inds = inds_labeled_slices
+  x = img[inds[0], inds[1]].transpose((0,2,3,1))[...,rgbimg]
   x[...,2] = 0 # remove blue
-  y = lab[mask_labeled_slices]
+  y = lab[inds[0], inds[1]]
   y = np_utils.to_categorical(y).reshape(y.shape + (-1,))
   y = y[...,rgbmem]
-  z = pimg[mask_labeled_slices][...,rgbmem]
+  z = pimg[inds[0], inds[1]][...,rgbmem]
   ss = [slice(None,None,5), slice(None,None,4), slice(None,None,4), slice(None)]
   def f(r):
     r = merg(r[ss])
@@ -370,14 +385,10 @@ def convolve_zyx(pimg, axes="tzyxc"):
   pimg = pimg.transpose((0,2,3,4,1))
   return pimg
 
-def lab2instance(x):
-  x[x!=1] = 0
-  x = label(x)[0]
-  return x
-
 def optimize(pimg):
 
   ## optimization params
+  mypath_opt = add_numbered_directory(mypath, 'opt')
   
   def risk(params):
     img_instseg = pimg[[0]]
@@ -399,7 +410,7 @@ def optimize(pimg):
   best = fmin(risk,
       space=segmentation_space,
       algo=tpe.suggest,
-      max_evals=100,
+      max_evals=n_evals,
       trials=trials)
 
   pickle.dump(trials, open(mypath_opt / 'trials.pkl', 'wb'))
@@ -491,7 +502,7 @@ def optimize(pimg):
     plt.setp(ax3.get_yticklabels(), visible=False)
     plt.savefig(mypath_opt / 'hypopt_seaborn_006.pdf')
 
-  return best['vals']
+  return best
 
 
 if INSTANCE_SEG:
