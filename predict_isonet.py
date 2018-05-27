@@ -16,7 +16,7 @@ plt.switch_backend('agg')
 import os
 from tifffile import imread
 from csbdeep.models import IsotropicCARE
-from csbdeep.predict import PercentileNormalizer, PadAndCropResizer
+from csbdeep.predict import PercentileNormalizer, PadAndCropResizer, NoNormalizer
 from csbdeep.plot_utils import plot_some
 
 # from csbdeep.utils import download_and_extract_zip_file
@@ -31,7 +31,7 @@ from csbdeep.plot_utils import plot_some
 
 x = np.load('data/img006_noconv.npy')
 # x = x[4]
-x = x[3]
+x = x[0]
 axes = 'ZCYX'
 subsample = 5.0
 print('image size       =', x.shape)
@@ -49,13 +49,16 @@ plt.savefig(mypath / 'predict_2.png')
 print('predict_2')
 
 
+
 model = IsotropicCARE(config=None, name=str(mypath / 'my_model'))
 model.load_weights()
 
-normalizer = PercentileNormalizer(1,99.8)
+normalizer = PercentileNormalizer(1,99.8, do_after=True)
+x = normalizer.before(x, axes)
+nonorm = NoNormalizer()
 resizer = PadAndCropResizer()
 
-restored = model.predict(x, axes, subsample, normalizer, resizer)
+restored = model.predict(x, axes, subsample, nonorm, resizer)
 np.save(mypath / 'restored', restored)
 np.save(mypath / 'restored_small', restored)
 
