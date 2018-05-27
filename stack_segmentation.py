@@ -12,6 +12,18 @@ def watershed_two_chan(x, nuc_mask=0.5, nuc_seed=0.8, mem_mask=1.0, mem_seed=1.0
   res  = watershed(poten, label(seed)[0], mask=mask, **kwargs)
   return res
 
+def watershed_memdist(x, nuc_mask=0.5, nuc_seed=0.8, mem_mask=1.0, dist_cut=5.0, ch_nuc=1, ch_mem=0, **kwargs):
+  x1 = x[...,ch_nuc] # nuclei
+  x2 = x[...,ch_mem] # borders
+  poten = 1 - x1 #- x2
+  membrane_mask = x2 > mem_mask
+  dist = ~membrane_mask
+  dist = distance_transform_edt(dist, sampling=[5,1,1])
+  mask = (x1 > nuc_mask) #& (x2 < mem_mask)
+  seed = (x1 > nuc_seed) & (dist > dist_cut)
+  res  = watershed(poten, label(seed)[0], mask=mask, **kwargs)
+  return res    
+
 def flat_thresh_two_chan(x, nuc_mask=0.5, mem_mask=0.5, ch_nuc=1, ch_mem=0):
   x1 = x[..., ch_nuc] # nuclei
   x2 = x[..., ch_mem] # borders
