@@ -6,14 +6,15 @@ from keras.optimizers import Adam, SGD
 from keras.utils import np_utils
 from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStopping, TensorBoard, ReduceLROnPlateau
 
-from segtools import lib as seglib
-from segtools import segtools_simple as ss
-from segtools import plotting
 from scipy.ndimage.filters import convolve
 import hyperopt
 from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
 from hyperopt import base as hopt_base
 from hyperopt.plotting import main_plot_histogram, main_plot_history, main_plot_vars
+
+from segtools import lib as seglib
+from segtools import segtools_simple as ss
+from segtools import plotting
 
 homedir = Path('/projects/project-broaddus/fisheye/')
 sys.path.insert(0, str(homedir))
@@ -23,28 +24,35 @@ import lib as ll
 import augmentation
 import stack_segmentation as stackseg
 
+## note: all paths are relative to project home directory
+try:
+  loadpath = Path(sys.argv[1])
+  print("LOAD DIR:", loadpath)
+  savepath = Path(sys.argv[2])
+  print("SAVE DIR:", savepath)
+except:
+  print("ipython?")
+  loadpath = Path(input("loadpath?"))
+  savepath = Path(input("savepath?"))
+
 ## boolean params for control flow
-TRAIN = True
+TRAIN = False
 PREDICT = False
-PIMG_ANALYSIS = True
+PIMG_ANALYSIS = False
 INSTANCE_SEG = True
 INSTANCE_ANALYSIS = True
-RERUN = not TRAIN  # and PREDICT and PIMG_ANALYSIS and INSTANCE_ANALYSIS)
+# RERUN = not TRAIN  # and PREDICT and PIMG_ANALYSIS and INSTANCE_ANALYSIS)
 
 ## boolean model params
 border_weights = True
 dist_channel = False
 blur = False
-
-## note: all paths are relative to project home directory
-
-mypath = Path(sys.argv[1])
-print("MYPATH:", mypath)
+xyz_ensemble = True
 
 ## define input channels
-dz = 0
+dz = 2
 n_channels = 2*(1+2*dz)
-ch_mem_xs = 2*dz # original, centered membrane channel
+ch_mem_xs = 2*dz # original, centered membrane channelk
 ch_nuc_xs = 2*dz + 1
 ch_mem_img = 0
 ch_nuc_img = 1
@@ -52,51 +60,54 @@ rgbimg = [ch_mem_img, ch_nuc_img, ch_nuc_img]
 rgbxs  = [ch_mem_xs, ch_nuc_xs, ch_nuc_xs]
 
 ## define classes
-n_classes = 4 ## DISTANCE REGRESSION
-ch_div = 3
+n_classes = 3 ## DISTANCE REGRESSION
+ch_div = 1
 ch_nuc = 1
 ch_mem = 0
 ch_bg  = 2
 ch_ignore = 1
 # ch_distance = 4
 rgbmem = [ch_mem, ch_nuc, ch_bg]
-rgbdiv = [ch_div, ch_nuc, ch_bg]
+rgbdiv = [ch_div, ch_mem, ch_div]
 classweights = [1/n_classes,]*n_classes
 
 unet_params = {
-  'n_pool' : 2,
+  'n_pool' : 3,
   'inputchan' : n_channels,
   'n_classes' : n_classes,
-  'n_convolutions_first_layer' : 32,
+  'n_convolutions_first_layer' : 64,
   'dropout_fraction' : 0.2,
+  'kern_width' : 3,
 }
-n_evals = 100
+n_epochs  = 50
 batchsize = 3
-
 
 # set to None to redo optimization
 segmentation_params = {'nuc_mask':0.51, 'nuc_seed':0.98}
-segmentation_params = None
-n_evals = 100
+segmentation_params = {'nuc_mask':0.51, 'mem_mask':0.1}
+segmentation_params = {'nuc_mask'  : 0.5,
+                       'nuc_seed' : 0.97,
+                       'mem_mask' : 0.6,
+                       'dist_cut' : 10.0,}
+# segmentation_params = None
+
+n_evals = 10
 ## if segmentation_params is Noene then optimize this space
 segmentation_space = {'nuc_mask' :hp.uniform('nuc_mask', 0.3, 0.7),
                        'nuc_seed':hp.uniform('nuc_seed', 0.9, 1.0),
                        'mem_mask':hp.uniform('mem_mask', 0.0, 0.3),
-                       'mem_seed':hp.uniform('mem_seed', 0.0, 0.3),
+                       'dist_cut':hp.uniform('dist_cut', 0.0, 10),
+                       # 'mem_seed':hp.uniform('mem_seed', 0.0, 0.3),
                        'compactness' : 0, #hp.uniform('compactness', 0, 10),
                        'connectivity': 1, #hp.choice('connectivity', [1,2,3]),
                        }
-segmentation_info   = {'name':'watershed_two_chan', 'param0':'mem_mask', 'param1':'mem_seed'}
+segmentation_info  = {'name':'watershed_two_chan', 'param0':'nuc_mask', 'param1':'dist_cut'}
+segmentation_info  = {'name':'flat_thresh_two_chan', 'param0':'nuc_mask', 'param1':'mem_mask'}
 
-stack_segmentation_function = lambda x,p : stackseg.watershed_two_chan(x, **p)
+stack_segmentation_function = lambda x,p : stackseg.flat_thresh_two_chan(x, **p)
+stack_segmentation_function = lambda x,p : stackseg.watershed_memdist(x, **p)
 
-if TRAIN:
-  json.dump(unet_params, open(mypath / 'unet_params.json', 'w'))
-  net = unet.get_unet_n_pool(**unet_params)
 
-if PREDICT:
-  unet_params = json.load(open(mypath / 'unet_params.json', 'r'))
-  net = unet.get_unet_n_pool(**unet_params)
 
 def condense_labels(lab):
   lab[lab==0]   = ch_bg
@@ -107,19 +118,22 @@ def condense_labels(lab):
   return lab
 
 ## load data
-img = imread(str(homedir / 'data/img006.tif'))
+# img = imread(str(homedir / 'data/img006.tif'))
 # img = np.load(str(homedir / 'data/img006_noconv.npy'))
-lab = imread(str(homedir / 'data/labels_lut.tif'))
-lab = lab[:,:,0]
+img = np.load(str(homedir / 'isonet/restored.npy'))
+img = img[np.newaxis,...]
+lab = np.load(str(homedir / 'data/labels_iso_t0.npy'))
+lab = lab[np.newaxis,...]
 lab = condense_labels(lab)
 ## TODO: this will break once we start labeling XZ and YZ in same volume.
 mask_labeled_slices = lab.min((2,3)) < 2
 inds_labeled_slices = np.indices(mask_labeled_slices.shape)[:,mask_labeled_slices]
 def lab2instance(x):
-  x[x!=1] = 0
+  x[x!=ch_nuc] = 0
   x = label(x)[0]
   return x
 gt_slices = np.array([lab2instance(x) for x in lab[inds_labeled_slices[0], inds_labeled_slices[1]]])
+
 
 def split_train_vali():
   ys = lab[mask_labeled_slices].copy()
@@ -138,7 +152,7 @@ def split_train_vali():
   xs = collapse(splt(xs,[r,r],[1,2]), [[0,1,3],[2],[4],[5]])
   ys = collapse(splt(ys,[r,r],[1,2]), [[0,1,3],[2],[4],[5]])
 
-  np.savez(mypath / 'traindat_small', xs=xs[::5], ys=ys[::5])
+  np.savez(savepath / 'traindat_small', xs=xs[::5], ys=ys[::5])
 
   ## turn off the `ignore` class
   # mask = ys[...,3]==1
@@ -207,6 +221,7 @@ def show_trainvali():
   res = multicat([[xt,xv,2], [yt,yv,2], 2])
   res = res[:,::2,::2]
   res = merg(res, 0) #[[0,1],[2],[3]])
+  io.imsave(savepath / 'train_vali_ex.png', res)
   return res
 
 def compile_and_callbacks():
@@ -214,7 +229,7 @@ def compile_and_callbacks():
   loss  = unet.my_categorical_crossentropy(weights=classweights, itd=0)
   net.compile(optimizer=optim, loss=loss, metrics=['accuracy'])
 
-  checkpointer = ModelCheckpoint(filepath=str(mypath / "w001.h5"), verbose=0, save_best_only=True, save_weights_only=True)
+  checkpointer = ModelCheckpoint(filepath=str(savepath / "w001.h5"), verbose=0, save_best_only=True, save_weights_only=True)
   earlystopper = EarlyStopping(patience=30, verbose=0)
   reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
   callbacks = [checkpointer, earlystopper, reduce_lr]
@@ -227,21 +242,21 @@ def random_augmentation_xy(xpatch, ypatch, train=True):
   # if random.random()<0.5:
   #     xpatch = np.flip(xpatch, axis=0)
   #     ypatch = np.flip(ypatch, axis=0)
-  if random.random()<0.5:
+  if random.random()<1:
       # randangle = (random.random()-0.5)*60 # even dist between ± 30
       randangle = 90 * random.randint(0,3)
       xpatch  = rotate(xpatch, randangle, reshape=False, mode='reflect')
       ypatch  = rotate(ypatch, randangle, reshape=False, mode='reflect')
   # if train:
-    # if random.random()<0.5:
-    #     delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
-    #     xpatch = augmentation.warp_multichan(xpatch, delta=delta)
-    #     ypatch = augmentation.warp_multichan(ypatch, delta=delta)
-    # if random.random()<0.5:
-    #     m = random.random()*xpatch.mean() # channels already normed
-    #     s = random.random()*xpatch.std()
-    #     noise = np.random.normal(m/4,s/4,xpatch.shape).astype(xpatch.dtype)
-    #     xpatch += noise
+  #   if random.random()<0.5:
+  #       delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
+  #       xpatch = augmentation.warp_multichan(xpatch, delta=delta)
+  #       ypatch = augmentation.warp_multichan(ypatch, delta=delta)
+  #   if random.random()<0.5:
+  #       m = random.random()*xpatch.mean() # channels already normed
+  #       s = random.random()*xpatch.std()
+  #       noise = np.random.normal(m/4,s/4,xpatch.shape).astype(xpatch.dtype)
+  #       xpatch += noise
   xpatch = xpatch.clip(min=0)
   xpatch = xpatch/xpatch.mean((0,1))
   return xpatch, ypatch
@@ -250,13 +265,13 @@ def train():
   stepsperepoch   = xs_train.shape[0] // batchsize
   validationsteps = xs_vali.shape[0] // batchsize
 
-  f_trainaug = lambda x,y:random_augmentation_xy(x,y,train=False)
+  f_trainaug = lambda x,y:random_augmentation_xy(x,y,train=True)
 
   bgen = unet.batch_generator_patches_aug(xs_train, ys_train,
                                     # steps_per_epoch=100,
                                     batch_size=batchsize,
                                     augment_and_norm=f_trainaug,
-                                    savepath=mypath)
+                                    savepath=savepath)
 
   f_valiaug = lambda x,y:random_augmentation_xy(x,y,train=False)
 
@@ -274,7 +289,7 @@ def train():
                     validation_data=vgen,
                     validation_steps=validationsteps)
 
-  net.save_weights(mypath / 'w002.h5')
+  net.save_weights(savepath / 'w002.h5')
   return history
 
 def plot_hist_key(k):
@@ -284,29 +299,35 @@ def plot_hist_key(k):
   plt.plot(y1, label=k)
   plt.plot(y2, label='val_' + k)
   plt.legend()
-  plt.savefig(mypath / (k + '.png'))
+  plt.savefig(savepath / (k + '.png'))
 
 def predict_train_vali():
   pred_xs_train = net.predict(xs_train)
-  res = collapse(splt(pred_xs_train[:64,...,rgbmem],8,0), [[0,2],[1,3],[4]])
-  io.imsave(mypath / 'pred_xs_train.png', res)
+  rows, cols = rowscols(pred_xs_train.shape[0], 8)
+  res = collapse(splt(pred_xs_train[:cols*rows,...,rgbmem],rows,0), [[0,2],[1,3],[4]])
+  io.imsave(savepath / 'pred_xs_train.png', res)
   pred_xs_vali = net.predict(xs_vali)
-  res = collapse(splt(pred_xs_vali[...,rgbmem],4,0), [[0,2],[1,3],[4]])
+  rows, cols = rowscols(pred_xs_vali.shape[0], 5)
+  res = collapse(splt(pred_xs_vali[:cols*rows,...,rgbmem],rows,0), [[0,2],[1,3],[4]])
+  io.imsave(savepath / 'pred_xs_vali.png', res)
   return res
 
 if TRAIN:
+  json.dump(unet_params, open(savepath / 'unet_params.json', 'w'))
+  net = unet.get_unet_n_pool(**unet_params)
   xs_train, xs_vali, ys_train, ys_vali = split_train_vali()
   res = show_trainvali()
-  io.imsave(mypath / 'train_vali_ex.png', res)
   callbacks = compile_and_callbacks()
   history = train()
-  print(history.history, file=open(mypath / 'history.txt','w'))
+  print(history.history, file=open(savepath / 'history.txt','w'))
   plot_hist_key('loss')
   plot_hist_key('acc')
   ## load best weights from previous training
-  net.load_weights(mypath / 'w001.h5')
+  net.load_weights(loadpath / 'w001.h5')
   res = predict_train_vali()
-  io.imsave(mypath / 'pred_xs_vali.png', res)
+  loadpath = savepath
+  print("TRAIN COMPLETE")
+
 
 ## Predictions on full dataset!
 
@@ -315,19 +336,31 @@ def predict_on_new():
   res = []
   ntimes = img.shape[0]
   for t in range(ntimes):
-    x = img[t]
-    x = ll.add_z_to_chan(x, dz, axes="ZCYX")
-    x = x / x.mean((1,2), keepdims=True)
-    pimg = net.predict(x)
-    pimg = pimg.astype(np.float16)
-    # qsave(collapse(splt(pimg[:64,::4,::4,rgbdiv],8,0),[[0,2],[1,3],[4]]))
-    res.append(pimg)
+    timepoint = []
+    for ax in ["ZYXC", "YXZC", "XZYC"]:
+      x = perm(img[t,:352], "ZCYX", ax)
+      x = ll.add_z_to_chan(x, dz, axes="ZYXC") # lying about direction of Z!
+      print(x.shape)
+      x = x / x.mean((1,2), keepdims=True)
+      pimg = net.predict(x, batch_size=1)
+      pimg = pimg.astype(np.float16)
+      pimg = perm(pimg, ax, "ZYXC")
+      # qsave(collapse(splt(pimg[:64,::4,::4,rgbdiv],8,0),[[0,2],[1,3],[4]]))
+      timepoint.append(pimg)
+    timepoint = np.array(timepoint)
+    timepoint = timepoint.mean(0)
+    res.append(timepoint)
   res = np.array(res)
   return res
 
 if PREDICT:
+  unet_params = json.load(open(loadpath / 'unet_params.json', 'r'))
+  net = unet.get_unet_n_pool(**unet_params)
+  net.load_weights(str(loadpath / 'w001.h5'))
   pimg = predict_on_new()
-  np.save(mypath / 'pimg', pimg)
+  np.save(savepath / 'pimg', pimg)
+  loadpath = savepath
+  print("PREDICT COMPLETE")
 
 def showresults():
   inds = inds_labeled_slices
@@ -352,7 +385,7 @@ def find_divisions():
   x = x[:,::6] ## downsample z
   div = x[...,ch_div].sum((2,3))
   val_thresh = np.percentile(div.flat, 95)
-  n_rows, n_cols = 7, 7
+  n_rows, n_cols = 7, min(7,x.shape[0])
   tz = np.argwhere(div > val_thresh)[:n_rows]
   lst = list(range(x.shape[0]))
   x2 = np.array([x[timewindow(lst, n[0], n_cols), n[1]] for n in tz])
@@ -363,13 +396,16 @@ def find_divisions():
   return x2
 
 if PIMG_ANALYSIS:
-  pimg = np.load(mypath / 'pimg.npy')
+  pimg = np.load(loadpath / 'pimg.npy')
   res = showresults()
-  io.imsave(mypath / 'results.png', res)
+  io.imsave(savepath / 'results.png', res)
   ## max division channel across z
-  np.save(mypath / 'max_z_divchan', pimg[:,...,ch_div].max(1))
-  res = find_divisions()
-  io.imsave(mypath / 'find_divisions.png', res)
+  io.imsave(savepath / 'max_z_divchan.png', merg(pimg[:,...,ch_div].max(1),0))
+  if pimg.shape[0] > 1:
+    res = find_divisions()
+    io.imsave(savepath / 'find_divisions.png', res)
+  loadpath = savepath
+  print("PIMG ANALYSIS COMPLETE")
 
 ## compute instance segmentation statistics  
 
@@ -388,7 +424,7 @@ def convolve_zyx(pimg, axes="tzyxc"):
 def optimize(pimg):
 
   ## optimization params
-  mypath_opt = add_numbered_directory(mypath, 'opt')
+  mypath_opt = add_numbered_directory(savepath, 'opt')
   
   def risk(params):
     img_instseg = pimg[[0]]
@@ -506,7 +542,7 @@ def optimize(pimg):
 
 
 if INSTANCE_SEG:
-  pimg = np.load(mypath / 'pimg.npy')
+  pimg = np.load(loadpath / 'pimg.npy')
 
   if blur:
     pimg = convolve_zyx(pimg)
@@ -520,14 +556,14 @@ if INSTANCE_SEG:
   print("COMPUTE FINAL SEGMENTATION")
   hyp = np.array([stack_segmentation_function(x, params) for x in pimg])
   hyp = hyp.astype(np.uint16)
-  np.save(mypath / 'hyp', hyp)
+  np.save(savepath / 'hyp', hyp)
 
   print("COMPARE SEGMENTATION AGAINST LABELED SLICES")
   inds = inds_labeled_slices[:,:-4] # use full
   gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
   pre_slices = hyp[inds[0], inds[1]]
   seg_scores = np.array([ss.seg(x,y) for x,y in zip(gt_slices, pre_slices)])
-  print({'seg': seg_scores.mean(), 'std':seg_scores.std()}, file=open(mypath / 'SEG.txt','w'))
+  print({'seg': seg_scores.mean(), 'std':seg_scores.std()}, file=open(savepath / 'SEG.txt','w'))
   
   print("CREATE DISPLAY GRID OF SEGMENTATION RESULTS")
   img_slices = img[inds[0], inds[1]]
@@ -546,14 +582,16 @@ if INSTANCE_SEG:
     # res.append(ax.get_array())
     ax.set_axis_off()
   fig.set_size_inches(10, 10, forward=True)
-  plt.savefig(mypath / 'seg_overlay.png',dpi=200, bbox_inches='tight')
+  plt.savefig(savepath / 'seg_overlay.png',dpi=200, bbox_inches='tight')
+  loadpath = savepath
+  print("INSTANCE SEGMENTATION COMPLETE")
 
 if INSTANCE_ANALYSIS:
-  hyp = np.load(mypath / 'hyp.npy')
+  hyp = np.load(loadpath / 'hyp.npy')
   ## look at cell shape statistics
   print("GENERATE NHLS FROM HYP AND ANALYZE")
-  nhls = seglib.labs2nhls(hyp, img[:,:,ch_nuc_img], simple=False)
-  pickle.dump(nhls, open(mypath / 'nhls.pkl', 'wb'))
+  nhls = seglib.labs2nhls(hyp, img[:,:352,ch_nuc_img], simple=False)
+  pickle.dump(nhls, open(savepath / 'nhls.pkl', 'wb'))
 
   plt.figure()
   cm = sns.cubehelix_palette(len(nhls))
@@ -561,8 +599,9 @@ if INSTANCE_ANALYSIS:
     areas = [n['area'] for n in nhl]
     areas = np.log2(sorted(areas))
     plt.plot(areas, '.', c=cm[i])
-  plt.savefig(mypath / 'cell_sizes.pdf')
-
+  plt.savefig(savepath / 'cell_sizes.pdf')
+  loadpath = savepath
+  print("INSTANCE ANALYSIS COMPLETE")
 
 #hi coleman! keep coding!
 #best, romina :)

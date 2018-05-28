@@ -120,6 +120,7 @@ def add_z_to_chan(img, dz, ind=None, axes="ZCYX"):
 
     ind = np.array(ind) + dz
     res = np.stack([add_single(i) for i in ind], axis=0)
+    res = perm(res, "ZYXC", axes)
 
     return res
 

@@ -15,16 +15,18 @@ from time import time
 
 ## python 3 only
 from pathlib import Path
+from functools import reduce
 
 ## stuff I've had to install
 from tabulate import tabulate
 
 ## anaconda defaults
-import networkx as nx
+# import networkx as nx
 import numpy as np
-import pandas as pd
+# import pandas as pd
 from tifffile import imread, imsave
 from scipy.ndimage import zoom, label, distance_transform_edt, rotate
+from scipy.ndimage.filters import convolve
 from scipy.signal import gaussian
 from scipy.ndimage.morphology import binary_dilation
 from skimage.morphology import watershed
@@ -170,3 +172,15 @@ def add_numbered_directory(path, base):
   newpath = Path(newpath)
   newpath.mkdir(exist_ok=False)
   return newpath
+
+def factors(n):
+  "from https://stackoverflow.com/questions/6800193/what-is-the-most-efficient-way-of-finding-all-the-factors-of-a-number-in-python"
+  return set(reduce(list.__add__,
+    ([i, n//i] for i in range(1, int(pow(n, 0.5) + 1)) if n % i == 0)))
+
+def rowscols(n,cols=8):
+  "divide n things up into rows*columns things"
+  rows,xt = divmod(n,cols)
+  if rows == 0:
+    rows,cols = 1,xt
+  return rows, cols
