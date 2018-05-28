@@ -96,33 +96,33 @@ def labeled_slices_to_xsys(img, mask, dz=0, axes="TZCYX"):
   return xs
 
 def add_z_to_chan(img, dz, ind=None, axes="ZCYX"):
-    assert img.ndim == 4
+  assert img.ndim == 4
 
-    ## by default do the entire stack
-    if ind is None:
-      ind = np.arange(img.shape[0])
+  ## by default do the entire stack
+  if ind is None:
+    ind = np.arange(img.shape[0])
 
-    ## pad img
-    img = perm(img, axes, "ZCYX")
-    pad = [(dz,dz)] + [(0,0)]*3
-    img = np.pad(img, pad, 'reflect')
+  ## pad img
+  img = perm(img, axes, "ZCYX")
+  pad = [(dz,dz)] + [(0,0)]*3
+  img = np.pad(img, pad, 'reflect')
 
-    ## allow single ind
-    if not hasattr(ind, "__len__"):
-      ind = [ind]
+  ## allow single ind
+  if not hasattr(ind, "__len__"):
+    ind = [ind]
 
-    def add_single(i):
-      res = img[i-dz:i+dz+1]
-      a,b,c,d = res.shape
-      res = res.reshape((a*b,c,d))
-      res = perm(res, "CYX", "YXC")
-      return res
+  def add_single(i):
+    res = img[i-dz:i+dz+1]
+    a,b,c,d = res.shape
+    res = res.reshape((a*b,c,d))
+    res = perm(res, "CYX", "YXC")
+    return res
 
     ind = np.array(ind) + dz
     res = np.stack([add_single(i) for i in ind], axis=0)
     res = perm(res, "ZYXC", axes)
 
-    return res
+  return res
 
 @DeprecationWarning
 def merge_into_cols(*args, n=10):
@@ -185,4 +185,31 @@ def tilez(img, ncols=8, ds=1):
       res[ss] = img[i]
   return res
 
+
+def broadcast_nonscalar_op(op, arr, axes):
+  "op must conserve shape."
+  N = arr.ndim
+  M = len(axes)
+  assert M==2
+  for i,m in enumerate(axes):
+    np.swapaxes(arr, m, i-M)
+  for idx in np.ndindex(arr.shape[:N-M]):
+    arr[idx] = op(arr[idx])
+  for i,m in enumerate(axes):
+    np.swapaxes(arr, m, i-M)
+  return arr
+
+def broadcast_nonscalar_func(func, arr, axes):
+  "func must conserve ndim, but not necessarily shape."
+  N = arr.ndim
+  M = len(axes)
+  for i,m in enumerate(axes):
+    arr = np.swapaxes(arr, m, i-M)
+  res = np.empty(arr.shape[:N-M],np.ndarray)
+  for idx in np.ndindex(arr.shape[:N-M]):
+    res[idx] = func(arr[idx]).tolist()
+  res = np.array(res.tolist())
+  for i,m in enumerate(axes):
+    res = np.swapaxes(res, m, i-M)
+  return res
 

@@ -34,9 +34,11 @@ def qopen():
   print(res)
   return np.load('qsave.npy')
 
-def sync(name):
-  res = run(['rsync efal:training/{0}/*.png training/{0}/'.format(name)], shell=True)
-  res = run(['rsync efal:training/{0}/SEG.txt training/{0}/'.format(name)], shell=True)
+def sync(name, external=False):
+  cmd = "rsync -rav --exclude='*.npy' --exclude='*.npz' --exclude='*.h5' falcon:/projects/project-broaddus/fisheye/{0}/* {0}".format(name)
+  if external:
+    cmd = "rsync -rav --exclude='*.npy' --exclude='*.npz' --exclude='*.h5' efal:{0}/* {0}".format(name)
+  res = run([cmd], shell=True)
   print(res)
 
 def updateall(w,lab):

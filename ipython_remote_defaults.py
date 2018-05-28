@@ -5,4 +5,5 @@ import matplotlib
 # matplotlib.use('Agg') # this is already done in remote bashrc!
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
+plt.ioff()
 import seaborn as sns
