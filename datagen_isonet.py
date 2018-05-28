@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 import os
 from tifffile import imread, TiffFile
-from csbdeep import datagen
+from csbdeep import data
 from csbdeep.plot_utils import plot_some
 from scipy.ndimage import rotate
 
@@ -18,7 +18,8 @@ from scipy.ndimage import rotate
 # )
 
 # x = imread('raw_data/retina/cropped_farred_RFP_GFP_2109175_2color_sub_10.20.tif')
-x = imread('data/img006.tif')
+# x = imread('data/img006_noconv.tif')
+x = np.load('data/img006_noconv.npy')
 
 # with TiffFile('data/img006.tif') as tif:
 #     images = tif.asarray()
@@ -27,6 +28,9 @@ x = imread('data/img006.tif')
 #             t = tag.name, tag.value
 #             print(t)
 #         image = page.asarray()
+
+mypath = Path('isonet')
+mypath.mkdir(exist_ok=True)
 
 x = x[3]
 axes = 'ZCYX'
@@ -39,30 +43,48 @@ plt.switch_backend('agg')
 
 plt.figure(figsize=(15,15))
 plot_some(np.moveaxis(x,1,-1)[[5,-5]], title_list=[['xy slice','xy slice']], pmin=2,pmax=99.8);
-plt.savefig('pngs/a.png')
+plt.savefig(mypath / 'datagen_1.png')
 
 plt.figure(figsize=(15,15))
 plot_some(np.moveaxis(np.moveaxis(x,1,-1)[:,[50,-50]],1,0), title_list=[['xz slice','xz slice']], pmin=2,pmax=99.8, aspect=subsample);
-plt.savefig('pngs/b.png')
+plt.savefig(mypath / 'datagen_2.png')
+
+from csbdeep.data import RawData
+def gimmeit_gen():
+    yield x,x,axes,None
+
+raw_data = RawData(gimmeit_gen, 1, "this is great!")
+
+# raw_data = data.get_tiff_pairs_from_folders (
+#     basepath    = 'data',
+#     source_dirs = ['isonet'],
+#     target_dir  = 'isonet',
+#     axes        = axes,
+# )
+
+def buildkern():
+    kern = np.exp(- (np.arange(10)**2 / 2))
+    kern /= kern.sum()
+    kern = kern.reshape([1,1,-1,1])
+    kern = np.stack([kern,kern],axis=1)
+    return kern
+
+psf_kern = buildkern()
 
 
-raw_data = datagen.get_tiff_pairs_from_folders (
-    basepath    = 'data',
-    source_dirs = ['isonet'],
-    target_dir  = 'isonet',
-    axes        = axes,
-)
+
+
 
 psf_aniso = imread('data/psf_aniso_NA_0.8.tif')
 psf_channels = np.stack([psf_aniso,]*2, axis=1)
 # psf_channels  = psf_aniso[:,np.newaxis]
-iso_transform = datagen.anisotropic_distortions(
+iso_transform = data.anisotropic_distortions(
     subsample = subsample,
-    # psf       = None, 
-    psf       = rotate(psf_channels, 90, axes=(0,2)),
+    psf       = None,
+    # psf       = rotate(psf_channels, 90, axes=(0,2)),
 )
 
-X, Y, XY_axes = datagen.create_patches (
+X, Y, XY_axes = data.create_patches (
     raw_data            = raw_data,
     patch_size          = (1,2,128,128),
     #patch_axes          = axes,
@@ -83,7 +105,7 @@ assert X.shape == Y.shape
 print("shape of X,Y =", X.shape)
 print("axes  of X,Y =", XY_axes)
 
-np.savez('my_training_data.npz', X=X, Y=Y, axes=XY_axes)
+np.savez(mypath / 'my_training_data.npz', X=X, Y=Y, axes=XY_axes)
 
 from csbdeep.plot_utils import plot_some
 
@@ -91,6 +113,6 @@ for i in range(2):
     plt.figure(figsize=(16,4))
     sl = slice(8*i, 8*(i+1))
     plot_some(np.moveaxis(X[sl],1,-1),np.moveaxis(Y[sl],1,-1),title_list=[np.arange(sl.start,sl.stop)])
-    plt.savefig('pngs/panel_{}.png'.format(i))
+    plt.savefig(mypath / 'datagen_panel_{}.png'.format(i))
 
 

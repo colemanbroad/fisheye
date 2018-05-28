@@ -25,41 +25,6 @@ from keras.preprocessing.image import ImageDataGenerator
 
 # import warping
 
-def normalize_X(X):
-    # normalize min and max over X per patch to [0,1]
-    X = X.astype('float32')
-    mi = np.amin(X,axis = (1,2), keepdims = True)
-    #mi = np.percentile(X, 1, axis = (1,2), keepdims = True)
-    #mi = np.percentile(X, 1)
-    #mi = X.min()
-    X -= mi
-    ma = np.amax(X,axis = (1,2), keepdims = True) + 1.e-10
-    #ma = np.percentile(X, 99, axis = (1,2), keepdims = True) + 1.e-10
-    #ma = np.percentile(X, 99) + 1.e-10
-    #ma = X.max()
-    X /= ma
-    #X = np.clip(X, 0, 1)
-    return X
-
-def labels_to_activations(Y, n_classes=2):
-    #assert Y.min() == 0
-    a,b,c = Y.shape
-    Y = Y.reshape(a*b*c)
-    Y = np_utils.to_categorical(Y, n_classes)
-    Y = Y.reshape(a, b, c, n_classes)
-    return Y.astype(np.float32)
-
-def add_singleton_dim(X):
-    """
-    backend [theano, tensorflow] dependent
-    """
-    a,b,c = X.shape
-    if K.image_dim_ordering() == 'th':
-        X = X.reshape((a, 1, b, c))
-    elif K.image_dim_ordering() == 'tf':
-        X = X.reshape((a, b, c, 1))
-    return X
-
 def my_categorical_crossentropy(weights=(1., 1.), itd=1, BEnd=K):
     """
     NOTE: The default weights assumes 2 classes, but the loss works for arbitrary classes if we simply change the length of the weights arg.
@@ -71,17 +36,13 @@ def my_categorical_crossentropy(weights=(1., 1.), itd=1, BEnd=K):
     log  = BEnd.log
     summ = BEnd.sum
     eps  = K.epsilon()
+    if itd==0:
+        ss = [slice(None), slice(None), slice(None), slice(None)]
+    else:
+        ss = [slice(None), slice(itd,-itd), slice(itd,-itd), slice(None)]
     def catcross(y_true, y_pred):
-        ## only use the valid part of the result! as if we had only made valid convolutions
-        yt = y_true[:,itd:-itd,itd:-itd,:]
-        yp = y_pred[:,itd:-itd,itd:-itd,:]
-        # if mask:
-        #     weights = y_true[...,0]
-        #     y_true  = y_true[...,[1,2,3]]
-        #     ce = weights * yt * log(yp + eps)
-        # ## NOTE: mean and sum commute here; we're still commuting the avg cross-entropy per pixel.
-        # else:
-        #     ce = yt * log(yp + eps)
+        yt = y_true[ss]
+        yp = y_pred[ss]
         ce = yt * log(yp + eps)
         ce = mean(ce, axis=(0,1,2))
         result = weights * ce
@@ -89,9 +50,10 @@ def my_categorical_crossentropy(weights=(1., 1.), itd=1, BEnd=K):
         return result
     return catcross
 
-def get_unet_n_pool(n_pool=2, inputchan=1, n_classes=2, n_convolutions_first_layer=32, dropout_fraction=0.2):
+def get_unet_n_pool(n_pool=2, inputchan=1, n_classes=2, n_convolutions_first_layer=32, 
+                    dropout_fraction=0.2, last_activation='softmax', kern_width=3):
     """
-    The info travel distance is given by info_travel_dist(n_pool, 3)
+    The info travel distance is given by info_travel_dist(n_pool, kern_width)
     """
 
     if K.image_dim_ordering() == 'th':
@@ -104,7 +66,7 @@ def get_unet_n_pool(n_pool=2, inputchan=1, n_classes=2, n_convolutions_first_lay
       chan = 'channels_last'
 
     def Conv(w):
-        return Conv2D(w, (3,3), padding='same', data_format=chan, activation='relu', kernel_initializer='he_normal')
+        return Conv2D(w, (kern_width,kern_width), padding='same', data_format=chan, activation='relu', kernel_initializer='he_normal')
     def Pool():
         return MaxPooling2D(pool_size=(2,2), data_format=chan)
     def Upsa():
@@ -155,7 +117,7 @@ def get_unet_n_pool(n_pool=2, inputchan=1, n_classes=2, n_convolutions_first_lay
     conv_bottom = Dropout(d)(conv_bottom)
     conv_bottom = Conv(s)(conv_bottom)
     
-    # now each time we cut s in half and build the next UCCDC
+    # now each time we cut s in half and build the next UACDC
     s = s//2
     up = uacdc(s, conv_bottom, conv_layers[-1])
 
@@ -168,7 +130,7 @@ def get_unet_n_pool(n_pool=2, inputchan=1, n_classes=2, n_convolutions_first_lay
     acti_layer = Conv2D(n_classes, (1, 1), padding='same', data_format=chan, activation=None)(up)
     if K.image_dim_ordering() == 'th':
         acti_layer = core.Permute((2,3,1))(acti_layer)
-    acti_layer = core.Activation(softmax)(acti_layer)
+    acti_layer = core.Activation(last_activation)(acti_layer)
     model = Model(inputs=inputs, outputs=acti_layer)
     return model
 
