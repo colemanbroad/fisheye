@@ -34,10 +34,8 @@ def flat_thresh_two_chan(x, nuc_mask=0.5, mem_mask=0.5, ch_nuc=1, ch_mem=0):
 ## --- objective functions ---
 
 def noop_min(fun, x0, args, **options):
-    return OptimizeResult(x=x0, fun=fun(x0, *args), success=True, nfev=1)
+  return OptimizeResult(x=x0, fun=fun(x0, *args), success=True, nfev=1)
   
-
-
 
 def poisson_disk_sample(width=1.0, height=1.0, radius=0.25, k=30):
     "https://pythonexample.com/code/poisson%%20disk%%20sampling/"

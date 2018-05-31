@@ -49,7 +49,6 @@ __kernel void star_dist(__global float* dst, read_only image2d_t src) {
             }
         }
     }
-
 }
 """
 

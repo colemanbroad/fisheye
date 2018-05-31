@@ -2,6 +2,7 @@ from subprocess import check_output, run
 from pathlib import Path
 from termcolor import colored
 from glob import glob
+import matplotlib.pyplot as plt
 
 def edit(num=None):
 	if num is None:

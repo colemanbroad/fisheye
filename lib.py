@@ -2,6 +2,7 @@ import numpy as np
 import re
 import pandas
 from segtools import lib as seglib
+from segtools import voronoi
 from scipy.ndimage import label
 from ipython_defaults import perm, flatten, merg, splt, collapse
 
@@ -29,35 +30,36 @@ def mkpoints():
   points[:,0] -= 1 # fix stupid 1-based indexing
   return points
 
-def highlight_segmentation_borders(img, hyp):
-  # hyp2 = lib.remove_nucs_hyp(nhl[:-2], hyp)
-  # iss = view.ImshowStack(hyp2)
-  # return iss
-  # iss = view.ImshowStack([img, hyp2])
-  # mask = lib.mask_nhl(nhl[-1], hyp)
-  # mask = hyp==nhl[-1]['label']
-  borders = voronoi.lab2binary_neibs3d(hyp)
-  img[borders<6] = img.max() + hyp2[borders<6]/hyp2.max()*img.max()
-  return img
 
-def sorted_nicely( l ): 
-  """ Sort the given iterable in the way that humans expect.
-      taken from https://stackoverflow.com/questions/2669059/how-to-sort-alpha-numeric-set-in-python
-  """ 
-  import re
-  convert = lambda text: int(text) if text.isdigit() else text 
-  alphanum_key = lambda key: [ convert(c) for c in re.split('([0-9]+)', key) ] 
-  return sorted(l, key = alphanum_key)
+def add_z_to_chan(img, dz, ind=None, axes="ZCYX"):
+  assert img.ndim == 4
 
-def getxyslice(iss):
-  x0,x1 = iss.fig.axes[0].get_xlim()
-  x0,x1 = int(x0), int(x1)
-  y1,y0 = iss.fig.axes[0].get_ylim() # y is inverted!
-  y0,y1 = int(y0), int(y1)
-  ss = [slice(None),] * iss.stack.ndim
-  ss[-2] = slice(y0,y1)
-  ss[-1] = slice(x0,x1)
-  return ss
+  ## by default do the entire stack
+  if ind is None:
+    ind = np.arange(img.shape[0])
+
+  ## pad img
+  img = perm(img, axes, "ZCYX")
+  pad = [(dz,dz)] + [(0,0)]*3
+  img = np.pad(img, pad, 'reflect')
+
+  ## allow single ind
+  if not hasattr(ind, "__len__"):
+    ind = [ind]
+
+  def add_single(i):
+    res = img[i-dz:i+dz+1]
+    a,b,c,d = res.shape
+    res = res.reshape((a*b,c,d))
+    res = perm(res, "CYX", "YXC")
+    return res
+
+    ind = np.array(ind) + dz
+    res = np.stack([add_single(i) for i in ind], axis=0)
+    res = perm(res, "ZYXC", axes)
+
+  return res
+
 
 @DeprecationWarning
 def fixlabels(imgWlab):
@@ -95,35 +97,6 @@ def labeled_slices_to_xsys(img, mask, dz=0, axes="TZCYX"):
   xs = np.array(xs) # results in "XYXC"
   return xs
 
-def add_z_to_chan(img, dz, ind=None, axes="ZCYX"):
-  assert img.ndim == 4
-
-  ## by default do the entire stack
-  if ind is None:
-    ind = np.arange(img.shape[0])
-
-  ## pad img
-  img = perm(img, axes, "ZCYX")
-  pad = [(dz,dz)] + [(0,0)]*3
-  img = np.pad(img, pad, 'reflect')
-
-  ## allow single ind
-  if not hasattr(ind, "__len__"):
-    ind = [ind]
-
-  def add_single(i):
-    res = img[i-dz:i+dz+1]
-    a,b,c,d = res.shape
-    res = res.reshape((a*b,c,d))
-    res = perm(res, "CYX", "YXC")
-    return res
-
-    ind = np.array(ind) + dz
-    res = np.stack([add_single(i) for i in ind], axis=0)
-    res = perm(res, "ZYXC", axes)
-
-  return res
-
 @DeprecationWarning
 def merge_into_cols(*args, n=10):
   a,b,c,d = args[0].shape
@@ -148,18 +121,6 @@ def merge_into_rows(*args, n=10):
     rows.append(ar)
   rows = np.concatenate(rows, axis=0)
   return rows
-
-def labels2nhl(lab):
-  lab[lab!=1] = 2
-  lab[lab==2] = 0
-  hyp = label(lab)[0]
-  nhl = seglib.hyp2nhl_2d(hyp)
-  return hyp,nhl
-
-def join_pimg_to_imgwlabs(imgwlabs, pimg):
-  pimg = pimg.transpose((0,1,4,2,3))
-  res = np.concatenate([imgwlabs, pimg], axis=2)
-  return res
 
 @DeprecationWarning
 def tilez(img, ncols=8, ds=1):
@@ -186,30 +147,80 @@ def tilez(img, ncols=8, ds=1):
   return res
 
 
-def broadcast_nonscalar_op(op, arr, axes):
-  "op must conserve shape."
+
+def labels2nhl(lab):
+  lab[lab!=1] = 2
+  lab[lab==2] = 0
+  hyp = label(lab)[0]
+  nhl = seglib.hyp2nhl_2d(hyp)
+  return hyp,nhl
+
+def join_pimg_to_imgwlabs(imgwlabs, pimg):
+  pimg = pimg.transpose((0,1,4,2,3))
+  res = np.concatenate([imgwlabs, pimg], axis=2)
+  return res
+
+
+
+def broadcast_nonscalar_op(op, arr, subaxes, axes_full=None):
+  "op must preserve shape. less general than broadcast_nonscalar_func, but probs faster."
+  
+  arr = arr.copy()
+  
   N = arr.ndim
-  M = len(axes)
-  assert M==2
-  for i,m in enumerate(axes):
-    np.swapaxes(arr, m, i-M)
+  M = len(subaxes)
+  if axes_full is None:
+    axes_full = axes2str(range(N))
+  subaxes = axes2str(subaxes)
+  newaxes = move_axes_to_end(axes_full, subaxes)
+  arr = perm(arr, axes_full, newaxes)
+
   for idx in np.ndindex(arr.shape[:N-M]):
     arr[idx] = op(arr[idx])
-  for i,m in enumerate(axes):
-    np.swapaxes(arr, m, i-M)
+
+  arr = perm(arr, newaxes, axes_full)
   return arr
 
-def broadcast_nonscalar_func(func, arr, axes):
-  "func must conserve ndim, but not necessarily shape."
+def broadcast_nonscalar_func(func, arr, subaxes, axes_full=None):
+  "func must preserve ndim, but not necessarily shape."
   N = arr.ndim
-  M = len(axes)
-  for i,m in enumerate(axes):
-    arr = np.swapaxes(arr, m, i-M)
+  M = len(subaxes)
+  if axes_full is None:
+    axes_full = axes2str(range(N))
+  subaxes = axes2str(subaxes)
+  newaxes = move_axes_to_end(axes_full, subaxes)
+  arr = perm(arr, axes_full, newaxes)
+
   res = np.empty(arr.shape[:N-M],np.ndarray)
   for idx in np.ndindex(arr.shape[:N-M]):
     res[idx] = func(arr[idx]).tolist()
   res = np.array(res.tolist())
-  for i,m in enumerate(axes):
-    res = np.swapaxes(res, m, i-M)
+
+  res = perm(res, newaxes, axes_full)
   return res
 
+
+
+
+from sortedcontainers import SortedSet, SortedDict
+def ax2dict(axes):
+  d = SortedDict()
+  for i,a in enumerate(axes):
+    # d[a] = i
+    d[i] = a
+  return d
+
+
+
+def axes2str(axes):
+  "idempotent."
+  return ''.join([str(x) for x in axes])
+
+def move_axes_to_end(allaxes, subaxes):
+  s1 = allaxes.translate({ord(i):None for i in subaxes})
+  s2 = s1 + subaxes
+  return s2
+
+
+
+# def move_axes_to_end(arr, axes)

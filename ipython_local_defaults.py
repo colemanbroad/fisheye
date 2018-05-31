@@ -22,6 +22,7 @@ import gputools
 ## martin's visual stuff
 import spimagine
 
+from subprocess import run
 
 def qopene():
   res = run(['rsync efal:qsave.npy .'], shell=True)
