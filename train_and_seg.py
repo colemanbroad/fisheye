@@ -2,27 +2,10 @@
 # %autoreload 2
 from ipython_remote_defaults import *
 
-from keras.optimizers import Adam, SGD
-from keras.utils import np_utils
-from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStopping, TensorBoard, ReduceLROnPlateau
-
-from scipy.ndimage.filters import convolve
-import hyperopt
-from hyperopt import fmin, tpe, hp, STATUS_OK, Trials
-from hyperopt import base as hopt_base
-from hyperopt.plotting import main_plot_histogram, main_plot_history, main_plot_vars
-
-from segtools import lib as seglib
-from segtools import segtools_simple as ss
-from segtools import plotting
+from train_defaults import *
 
 homedir = Path('/projects/project-broaddus/fisheye/')
 sys.path.insert(0, str(homedir))
-
-import unet
-import lib as ll
-import augmentation
-import stack_segmentation as stackseg
 
 ## note: all paths are relative to project home directory
 try:
@@ -37,8 +20,8 @@ except:
 
 ## boolean params for control flow
 TRAIN = False
-PREDICT = False
-PIMG_ANALYSIS = False
+PREDICT = True
+PIMG_ANALYSIS = True
 INSTANCE_SEG = True
 INSTANCE_ANALYSIS = True
 # RERUN = not TRAIN  # and PREDICT and PIMG_ANALYSIS and INSTANCE_ANALYSIS)
@@ -82,21 +65,13 @@ unet_params = {
 n_epochs  = 50
 batchsize = 3
 
-# set to None to redo optimization
-segmentation_params = {'nuc_mask':0.51, 'nuc_seed':0.98}
-segmentation_params = {'nuc_mask':0.51, 'mem_mask':0.1}
-segmentation_params = {'nuc_mask'  : 0.5,
-                       'nuc_seed' : 0.97,
-                       'mem_mask' : 0.6,
-                       'dist_cut' : 10.0,}
-# segmentation_params = None
 
+## hyperopt optimization info
 n_evals = 10
-## if segmentation_params is Noene then optimize this space
-segmentation_space = {'nuc_mask' :hp.uniform('nuc_mask', 0.3, 0.7),
-                       'nuc_seed':hp.uniform('nuc_seed', 0.9, 1.0),
-                       'mem_mask':hp.uniform('mem_mask', 0.0, 0.3),
-                       'dist_cut':hp.uniform('dist_cut', 0.0, 10),
+segmentation_space = {'nuc_mask' :ho.hp.uniform('nuc_mask', 0.3, 0.7),
+                       'nuc_seed':ho.hp.uniform('nuc_seed', 0.9, 1.0),
+                       'mem_mask':ho.hp.uniform('mem_mask', 0.0, 0.3),
+                       'dist_cut':ho.hp.uniform('dist_cut', 0.0, 10),
                        # 'mem_seed':hp.uniform('mem_seed', 0.0, 0.3),
                        'compactness' : 0, #hp.uniform('compactness', 0, 10),
                        'connectivity': 1, #hp.choice('connectivity', [1,2,3]),
@@ -104,8 +79,21 @@ segmentation_space = {'nuc_mask' :hp.uniform('nuc_mask', 0.3, 0.7),
 segmentation_info  = {'name':'watershed_two_chan', 'param0':'nuc_mask', 'param1':'dist_cut'}
 segmentation_info  = {'name':'flat_thresh_two_chan', 'param0':'nuc_mask', 'param1':'mem_mask'}
 
+
+
+
+
 stack_segmentation_function = lambda x,p : stackseg.flat_thresh_two_chan(x, **p)
+segmentation_params = {'nuc_mask':0.51, 'mem_mask':0.1}
+
 stack_segmentation_function = lambda x,p : stackseg.watershed_memdist(x, **p)
+segmentation_params = {'dist_cut': 9.780390266161866, 'mem_mask': 0.041369622211090654, 'nuc_mask': 0.5623125724186882, 'nuc_seed': 0.9610987296474213}
+
+stack_segmentation_function = lambda x,p : stackseg.watershed_two_chan(x, **p)
+segmentation_params = {'nuc_mask':0.51, 'nuc_seed':0.98}
+
+## set to None to redo optimization
+# segmentation_params = None
 
 
 
@@ -121,9 +109,9 @@ def condense_labels(lab):
 # img = imread(str(homedir / 'data/img006.tif'))
 # img = np.load(str(homedir / 'data/img006_noconv.npy'))
 img = np.load(str(homedir / 'isonet/restored.npy'))
-img = img[np.newaxis,...]
+img = img[np.newaxis,:352,...]
 lab = np.load(str(homedir / 'data/labels_iso_t0.npy'))
-lab = lab[np.newaxis,...]
+lab = lab[np.newaxis,:352,...]
 lab = condense_labels(lab)
 ## TODO: this will break once we start labeling XZ and YZ in same volume.
 mask_labeled_slices = lab.min((2,3)) < 2
@@ -337,8 +325,9 @@ def predict_on_new():
   ntimes = img.shape[0]
   for t in range(ntimes):
     timepoint = []
-    for ax in ["ZYXC", "YXZC", "XZYC"]:
-      x = perm(img[t,:352], "ZCYX", ax)
+    # for ax in ["ZYXC", "YXZC", "XZYC"]:
+    for ax in ["ZYXC"]: #, "YXZC", "XZYC"]:
+      x = perm(img[t], "ZCYX", ax)
       x = ll.add_z_to_chan(x, dz, axes="ZYXC") # lying about direction of Z!
       print(x.shape)
       x = x / x.mean((1,2), keepdims=True)
@@ -405,6 +394,7 @@ if PIMG_ANALYSIS:
     res = find_divisions()
     io.imsave(savepath / 'find_divisions.png', res)
   loadpath = savepath
+  pimg = np.save(savepath / 'pimg.npy', pimg)
   print("PIMG ANALYSIS COMPLETE")
 
 ## compute instance segmentation statistics  
@@ -442,10 +432,10 @@ def optimize(pimg):
 
   ## perform the optimization
 
-  trials = Trials()
-  best = fmin(risk,
+  trials = ho.Trials()
+  best = ho.fmin(risk,
       space=segmentation_space,
-      algo=tpe.suggest,
+      algo=ho.tpe.suggest,
       max_evals=n_evals,
       trials=trials)
 
@@ -478,17 +468,17 @@ def optimize(pimg):
   save_img()
 
   plt.figure()
-  main_plot_histogram(trials=trials)
+  ho.plotting.main_plot_histogram(trials=trials)
   plt.savefig(mypath_opt / 'hypopt_histogram.pdf')
 
   plt.figure()
-  main_plot_history(trials=trials)
+  ho.plotting.main_plot_history(trials=trials)
   plt.savefig(mypath_opt / 'hypopt_history.pdf')
 
-  domain = hopt_base.Domain(risk, segmentation_space)
+  domain = ho.base.Domain(risk, segmentation_space)
 
   plt.figure()
-  main_plot_vars(trials=trials, bandit=domain)
+  ho.plotting.main_plot_vars(trials=trials, bandit=domain)
   plt.tight_layout()
   plt.savefig(mypath_opt / 'hypopt_vars.pdf')
 

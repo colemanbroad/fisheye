@@ -6,6 +6,9 @@ from segtools import voronoi
 from scipy.ndimage import label
 from ipython_defaults import perm, flatten, merg, splt, collapse
 
+from sortedcontainers import SortedSet, SortedDict
+
+
 def autocorr(x):
     result = np.correlate(x, x, mode='full')
     print(result.shape, result.size)
@@ -96,6 +99,37 @@ def labeled_slices_to_xsys(img, mask, dz=0, axes="TZCYX"):
     xs.append(add_z_to_chan(imgpad[t],z+dz,dz))
   xs = np.array(xs) # results in "XYXC"
   return xs
+
+
+def add_z_to_chan(img, dz, ind=None, axes="ZCYX"):
+  assert img.ndim == 4
+
+  ## by default do the entire stack
+  if ind is None:
+    ind = np.arange(img.shape[0])
+
+  ## pad img
+  img = perm(img, axes, "ZCYX")
+  pad = [(dz,dz)] + [(0,0)]*3
+  img = np.pad(img, pad, 'reflect')
+
+  ## allow single ind
+  if not hasattr(ind, "__len__"):
+    ind = [ind]
+
+  def add_single(i):
+    res = img[i-dz:i+dz+1]
+    a,b,c,d = res.shape
+    res = res.reshape((a*b,c,d))
+    res = perm(res, "CYX", "YXC")
+    return res
+
+  ind = np.array(ind) + dz
+  res = np.stack([add_single(i) for i in ind], axis=0)
+  res = perm(res, "ZYXC", axes)
+
+  return res
+
 
 @DeprecationWarning
 def merge_into_cols(*args, n=10):
@@ -201,8 +235,6 @@ def broadcast_nonscalar_func(func, arr, subaxes, axes_full=None):
 
 
 
-
-from sortedcontainers import SortedSet, SortedDict
 def ax2dict(axes):
   d = SortedDict()
   for i,a in enumerate(axes):
