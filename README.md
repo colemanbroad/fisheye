@@ -1,2 +1,2 @@
-Segmentation and tracking inside the zebrafish retina using active learning
+Segmentation and tracking inside the zebrafish retina with deep nets and assignment models.
 

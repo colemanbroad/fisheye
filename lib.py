@@ -3,16 +3,16 @@ import re
 import pandas
 from segtools import lib as seglib
 from segtools import voronoi
+from segtools.ipython_defaults import perm, flatten, merg, splt, collapse
 from scipy.ndimage import label
-from ipython_defaults import perm, flatten, merg, splt, collapse
 
 from sortedcontainers import SortedSet, SortedDict
 
 
 def autocorr(x):
-    result = np.correlate(x, x, mode='full')
-    print(result.shape, result.size)
-    return result[result.size//2:]
+  result = np.correlate(x, x, mode='full')
+  print(result.shape, result.size)
+  return result[result.size//2:]
 
 def autocorr_multi(img):
   xs = np.arange(0, 400, 40, np.int)
@@ -32,36 +32,6 @@ def mkpoints():
   points = points[:,[2,1,0]]
   points[:,0] -= 1 # fix stupid 1-based indexing
   return points
-
-
-def add_z_to_chan(img, dz, ind=None, axes="ZCYX"):
-  assert img.ndim == 4
-
-  ## by default do the entire stack
-  if ind is None:
-    ind = np.arange(img.shape[0])
-
-  ## pad img
-  img = perm(img, axes, "ZCYX")
-  pad = [(dz,dz)] + [(0,0)]*3
-  img = np.pad(img, pad, 'reflect')
-
-  ## allow single ind
-  if not hasattr(ind, "__len__"):
-    ind = [ind]
-
-  def add_single(i):
-    res = img[i-dz:i+dz+1]
-    a,b,c,d = res.shape
-    res = res.reshape((a*b,c,d))
-    res = perm(res, "CYX", "YXC")
-    return res
-
-    ind = np.array(ind) + dz
-    res = np.stack([add_single(i) for i in ind], axis=0)
-    res = perm(res, "ZYXC", axes)
-
-  return res
 
 
 @DeprecationWarning
@@ -99,36 +69,6 @@ def labeled_slices_to_xsys(img, mask, dz=0, axes="TZCYX"):
     xs.append(add_z_to_chan(imgpad[t],z+dz,dz))
   xs = np.array(xs) # results in "XYXC"
   return xs
-
-
-def add_z_to_chan(img, dz, ind=None, axes="ZCYX"):
-  assert img.ndim == 4
-
-  ## by default do the entire stack
-  if ind is None:
-    ind = np.arange(img.shape[0])
-
-  ## pad img
-  img = perm(img, axes, "ZCYX")
-  pad = [(dz,dz)] + [(0,0)]*3
-  img = np.pad(img, pad, 'reflect')
-
-  ## allow single ind
-  if not hasattr(ind, "__len__"):
-    ind = [ind]
-
-  def add_single(i):
-    res = img[i-dz:i+dz+1]
-    a,b,c,d = res.shape
-    res = res.reshape((a*b,c,d))
-    res = perm(res, "CYX", "YXC")
-    return res
-
-  ind = np.array(ind) + dz
-  res = np.stack([add_single(i) for i in ind], axis=0)
-  res = perm(res, "ZYXC", axes)
-
-  return res
 
 
 @DeprecationWarning
@@ -196,45 +136,6 @@ def join_pimg_to_imgwlabs(imgwlabs, pimg):
 
 
 
-def broadcast_nonscalar_op(op, arr, subaxes, axes_full=None):
-  "op must preserve shape. less general than broadcast_nonscalar_func, but probs faster."
-  
-  arr = arr.copy()
-  
-  N = arr.ndim
-  M = len(subaxes)
-  if axes_full is None:
-    axes_full = axes2str(range(N))
-  subaxes = axes2str(subaxes)
-  newaxes = move_axes_to_end(axes_full, subaxes)
-  arr = perm(arr, axes_full, newaxes)
-
-  for idx in np.ndindex(arr.shape[:N-M]):
-    arr[idx] = op(arr[idx])
-
-  arr = perm(arr, newaxes, axes_full)
-  return arr
-
-def broadcast_nonscalar_func(func, arr, subaxes, axes_full=None):
-  "func must preserve ndim, but not necessarily shape."
-  N = arr.ndim
-  M = len(subaxes)
-  if axes_full is None:
-    axes_full = axes2str(range(N))
-  subaxes = axes2str(subaxes)
-  newaxes = move_axes_to_end(axes_full, subaxes)
-  arr = perm(arr, axes_full, newaxes)
-
-  res = np.empty(arr.shape[:N-M],np.ndarray)
-  for idx in np.ndindex(arr.shape[:N-M]):
-    res[idx] = func(arr[idx]).tolist()
-  res = np.array(res.tolist())
-
-  res = perm(res, newaxes, axes_full)
-  return res
-
-
-
 def ax2dict(axes):
   d = SortedDict()
   for i,a in enumerate(axes):
@@ -243,15 +144,6 @@ def ax2dict(axes):
   return d
 
 
-
-def axes2str(axes):
-  "idempotent."
-  return ''.join([str(x) for x in axes])
-
-def move_axes_to_end(allaxes, subaxes):
-  s1 = allaxes.translate({ord(i):None for i in subaxes})
-  s2 = s1 + subaxes
-  return s2
 
 
 

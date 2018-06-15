@@ -1,6 +1,7 @@
 from segtools.defaults.ipython_local import *
 psf = imread('data/settingsColemandataset_4_crop.tif')
 psf = np.moveaxis(psf,0,1)
+
 a = 170
 ss = np.s_[:,:a,:a,:a]
 psf = psf[ss]
@@ -34,6 +35,7 @@ def split_psf(h0, gamma=1.):
 
     orig_shape = h0.shape
     assert orig_shape[0]==orig_shape[1]==orig_shape[2]
+    assert orig_shape[0]%2==0
 
     pads = tuple(s % 2 for s in orig_shape)
     slice_pads = tuple(slice(p, s + p) for s, p in zip(orig_shape, pads))
@@ -77,24 +79,90 @@ comments = """
     x=0,y=0 (xy view)
     y=0,z=0 (yz view)
     x=0,z=0 (xz view)
-
   Apparently this is a know issue.
-  The results look nice for 
+  The results look nice when the input has even width.
   """
 
 res = split_psf(psf[1], gamma=5e-4)
 h_aniso = h_aniso.clip(min=0)
 h_aniso = h_aniso / h_aniso.sum()
 
+comments = """
+  Now we have to take the anisotropy of our voxel size into account.
+  The size of our voxels are 0.5,1,1 µm.
+  We have to adjust for this.
+  We could start by simply avg-pooling along the z dimension with poolsize 2.
+  Then our voxel size is an isotropic 1µm.
+  Then we have to re-crop and rerun h_anioso generation.
+"""
 
+from skimage.measure import block_reduce
+psf = imread('data/settingsColemandataset_4_crop.tif')
+psf = np.moveaxis(psf,0,1)
 
+## const padding will be cropped away later
+psf = np.array([block_reduce(psf[i,:170],(2,1,1),np.sum) for i in [0,1]])
 
+def plot_xyzmax(img,ax=None):
+  gspec = matplotlib.gridspec.GridSpec(1,3)
+  if ax is None:
+    fig = plt.figure()
+  for i in [0,1,2]:
+    ax = plt.subplot(gspec[i])
+    ax.imshow(img.max(i))
+plot_xyzmax(psf_iso)
 
+plot_xyzmax(psf[0])
+plot_xyzmax(psf[1])
 
+## we can measure the bead's 3D position, and crop it so that it's in the center.
+# psf = psf[:,:77,:2*83, :2*77]
 
+## let's center these psfs automatically with subpixel accuracy
+## first the 0 dimension
+psf0 = psf[0]
+psf0 = psf0 / psf0.sum()
+plot_xyzmax(psf0)
 
+image_center    = np.array(psf0.shape) / 2 - 0.5
+center_of_mass  = (np.indices(psf0.shape)*psf0).sum((1,2,3)) #+ 0.5
+brightest_pixel = np.argwhere(psf0 == psf0.max())[0] #+ 0.5
 
+p0 = matplotlib.patches.Circle((image_center[2],image_center[1]),radius=1, color='r', fill=False)
+p1 = matplotlib.patches.Circle((center_of_mass[2],center_of_mass[1]),radius=1, color='g', fill=False)
+p2 = matplotlib.patches.Circle((brightest_pixel[2],brightest_pixel[1]),radius=1, color='b', fill=False)
 
+ax = plt.figure(1).axes[0]
+ax.add_patch(p0)
+ax.add_patch(p1)
+ax.add_patch(p2)
 
+results = """
+  From the above we can see that the center_of_mass can't find the peak at all! Why is that?
+  If the peak is off center, and the peak is not much higher than the backgound, then it may miss.
+  """
 
+from scipy.ndimage.interpolation import shift
+
+psf0_shifted = shift(psf0, image_center - brightest_pixel)
+
+w = [30,]*3
+def sd(i):
+  return slice(floor(image_center[i]-w[i]), ceil(image_center[i]+w[i]))
+ss = [sd(i) for i in [0,1,2]]
+## Adjust w until you can't see the const-padding from `shift`.
+
+plot_xyzmax(psf0_shifted[ss])
+
+from segtools.patchmaker import centered_slice
+
+def center_psf_crop_and_get_aniso(psf, w=30):
+  image_center    = np.array(psf.shape) / 2 - 0.5
+  brightest_pixel = np.argwhere(psf == psf.max())[0] #+ 0.5
+  psf_shifted = shift(psf, image_center - brightest_pixel)
+  ss = centered_slice(image_center, w)
+  _, psf_aniso = split_psf(psf_shifted[ss])
+  return psf_aniso
+psf_aniso_centered_cropped = broadcast_nonscalar_func(center_psf_crop_and_get_aniso, psf, '123')
+np.save('data/measured_psfs', psf_aniso_centered_cropped)
 
