@@ -44,6 +44,9 @@ def process_single_psf(psf, w=30):
   brightest_pixel = np.argwhere(psf == psf.max())[0] #+ 0.5
   psf = shift(psf, image_center - brightest_pixel)
   ss = centered_slice(image_center, w)
+  # print(ss)
+  # assert False
+  plot_xyzmax(psf[ss])
   _, psf = split_psf(psf[ss])
   return psf
 
@@ -54,17 +57,21 @@ def load_crop_run():
   """
   psfs = imread('data/settingsColemandataset_4_crop.tif')
   psfs = np.moveaxis(psfs,0,1)
+
   # a = 170
   # ss = np.s_[:,:a,:a,:a]
   # psfs = psfs[ss]
 
+  ## normalize
   psfs = psfs / psfs.sum(axis=(1,2,3), keepdims=True)
-  ## const padding will be cropped away later
-
+  ## first make voxel size isotropic
+  psfs = np.array([block_reduce(psfs[i],(2,1,1),np.sum) for i in [0,1]])
+  ## then get anisotropic part of psf
   f = lambda psf: process_single_psf(psf, w=40)
   psfs = broadcast_nonscalar_func(f, psfs, '123')
+  ## then scale psf so voxel size matches x,y dimensions of img006.
   ds = 5
-  psfs = np.array([block_reduce(psfs[i],(2*ds,ds,ds),np.sum) for i in [0,1]])
+  psfs = np.array([block_reduce(psfs[i],(ds,ds,ds),np.sum) for i in [0,1]])
   np.save('data/measured_psfs', psfs)
   return psfs
 
