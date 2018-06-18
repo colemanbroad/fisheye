@@ -41,9 +41,28 @@ def downsample_stack(img, axis=0, factor=5, kern=buildkern()):
   # img = imresize(img, newshape, interp='nearest')
   return img
 
-def original():
+def select_specific_indices(arr, slices):
+  for sli in slices:
+    arr = arr[sli]
+  return arr
+
+def load():
   img = np.load('data/img006_noconv.npy')
   img = perm(img, 'tzcyx', 'tczyx')
+  img = img[[0,4,8]]
+  img = img[[0]]
+  return img
+
+def load_img__apply_psf():
+  img = load()
+  kernel = np.load('data/measured_psfs.npy')
+
+  def func(ind):
+    t,c = ind
+    res = convolve(img[t,c], kernel[c])
+    return res
+  kernel = rotate(kernel, 90, axes=(1,3))
+  img = broadcast_nonscalar_func(func, img, '234')
 
   if False:
     ## take a random subset of 20% of z slices and 3 timepoints
@@ -53,36 +72,54 @@ def original():
 
     ss = [slice(None)]*5
     ss[0] = [0,4,8]
-
-  img = img[[0,4,8]]
-  s = img.shape
   
-  def subsample_ind(img, axis, nsample):
+  return img
+
+def compare1(img=None, img2=None):
+  if img is None:
+    img  = load()
+  if img2 is None:
+    img2 = load_img__apply_psf()
+  iss1  = Stack(np.swapaxes(img, 2, 4)) # swap z,x
+  iss2  = Stack(img[...,::5]) # downsample x
+  iss3  = Stack(np.swapaxes(img2, 2, 4)) # swap z,x in blurred image
+  iss4  = Stack(img2[...,::5]) # downsample x
+  return iss1, iss2, iss3, iss4
+
+def downsample_and_plot(img):
+  def random_inds_from_axis(img, axis, nsample):
     ss = [slice(None)]*img.ndim
     ss[axis] = k_random_inds(img.shape[axis], nsample)
     res = img[ss]
     return res
 
-  img_z = subsample_ind(img, 2, 8)
+  img_z = random_inds_from_axis(img, 2, 8)
   img_z = perm(img_z, "tczyx", "tczyx")
-  img_y = subsample_ind(img, 3, 8)
+  img_y = random_inds_from_axis(img, 3, 8)
   img_y = perm(img_y, "tczyx", "tcyxz")
-  img_x = subsample_ind(img, 4, 8)
+  img_x = random_inds_from_axis(img, 4, 8)
   img_x = perm(img_x, "tczyx", "tcxyz")
 
-  # kernel = 
-  def makecat():
-    img_z_down_x = broadcast_nonscalar_func(lambda x: downsample_slice(x,0), img_z, (3,4))
-    img_z_down_x = np.swapaxes(img_z_down_x, -1, -2)
-    img_z_down_y = broadcast_nonscalar_func(lambda x: downsample_slice(x,1), img_z, (3,4))
-    cat = np.concatenate([img_z_down_x, img_x, img_z_down_y, img_y], axis=-1)
-    return cat
+  ss = [slice(None)]*img.ndim
+  ss[3] = slice(None,None,5)
+  img_z_down_x = img_z[ss]
+  img_z_down_x = np.swapaxes(img_z_down_x, -1, -2)
+  img_z_down_x = img_z_down_x[...,:71]
 
-  iss = Stack(makecat())
+  ss = [slice(None)]*img.ndim
+  ss[4] = slice(None,None,5)
+  img_z_down_y = img_z[ss]
+  img_z_down_y = img_z_down_y[...,:71]
+
+  cat = np.concatenate([img_z_down_x, img_x, img_z_down_y, img_y], axis=-1)
+
+  iss = Stack(cat)
   return iss
 
-
-
+def run():
+  img = load_img__apply_psf()
+  iss = downsample_and_plot(img)
+  return iss
 
 history = """
 
@@ -124,5 +161,15 @@ The correct order of operations is
 The current problem is there's no way to know if your downsampled slices look like the real slices.
 The `iss` panel shows img_z_down_x and img_x, but they have no meaningful correspondence.
 
+Now we apply the convolution to the entire stack...
+And since this is costly we split original into load_img__apply_psf and downsample_and_plot.
+
+`compare1` shows how applying the convolution makes x way too blurry.
+Simple downsampling of x without blurring gives the most convincing yz look alike.
+1. The convolution is applied to make the effective psf isotropic, but this is done ontop of the image noise.
+2. This has the effect of hiding noise and the high frequency signal.
+3. Ideally we would first denoise, then apply the pure-anisotropic psf, then *renoise*!
+    This assumes noise happens mostly at the end, after the psf has been applied.
+    True, for finite sampling noise and detector noise?
 
 """
