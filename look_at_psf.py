@@ -5,6 +5,8 @@ from skimage.measure import block_reduce
 from scipy.ndimage.interpolation import shift
 from segtools.patchmaker import centered_slice
 
+import ipdb
+
 def split_psf(h0, gamma=1.):
   """
   function originally by Martin Weigert
@@ -40,13 +42,12 @@ def split_psf(h0, gamma=1.):
   
 def process_single_psf(psf, w=30):
   # _, psf = split_psf(psf)
+  # c = idx[0]
   image_center    = np.array(psf.shape) / 2 - 0.5
   brightest_pixel = np.argwhere(psf == psf.max())[0] #+ 0.5
   psf = shift(psf, image_center - brightest_pixel)
+  psf = psf.clip(min=0)
   ss = centered_slice(image_center, w)
-  # print(ss)
-  # assert False
-  plot_xyzmax(psf[ss])
   _, psf = split_psf(psf[ss])
   return psf
 
@@ -62,18 +63,91 @@ def load_crop_run():
   # ss = np.s_[:,:a,:a,:a]
   # psfs = psfs[ss]
 
+  ## background subtraction, channel independent.
+  psfs = psfs - np.percentile(psfs, 2, axis=(1,2,3), keepdims=True)
   ## normalize
   psfs = psfs / psfs.sum(axis=(1,2,3), keepdims=True)
   ## first make voxel size isotropic
   psfs = np.array([block_reduce(psfs[i],(2,1,1),np.sum) for i in [0,1]])
   ## then get anisotropic part of psf
-  f = lambda psf: process_single_psf(psf, w=40)
+  f = lambda idx: process_single_psf(psfs[idx[0]], w=40)
   psfs = broadcast_nonscalar_func(f, psfs, '123')
   ## then scale psf so voxel size matches x,y dimensions of img006.
   ds = 5
   psfs = np.array([block_reduce(psfs[i],(ds,ds,ds),np.sum) for i in [0,1]])
   np.save('data/measured_psfs', psfs)
   return psfs
+
+def load():
+  psfs = imread('data/settingsColemandataset_4_crop.tif')
+  psfs = np.moveaxis(psfs,0,1)
+  return psfs
+
+def try_various_bg_subtraction():
+  ## percentile
+  psfs = load()
+  psfs = psfs - np.percentile(psfs, 2, axis=(1,2,3), keepdims=True)
+  psfs = psfs.clip(min=0)
+  psfs = run_after_bg_subtraction(psfs)
+
+  fs = "{:+8.4E}  "*3
+
+  for r in psfs:
+    print("max  min   ratio")
+    print(fs.format(r.max(), r.min(), r.max()/r.min()))
+    plot_xyzmax(r)
+
+  ## global spatial min. channel independent.
+  psfs = load()
+  psfs = psfs - psfs.min(axis=(1,2,3), keepdims=True)
+  psfs = run_after_bg_subtraction(psfs)
+
+  for r in psfs:
+    print("max  min   ratio")
+    print(fs.format(r.max(), r.min(), r.max()/r.min()))
+
+  ## set boundary
+  psfs = load()
+  psfs = [set_boundary_to_zero_and_normalize(psfs[c]) for c in [0,1]]
+  psfs = np.array(psfs)
+  psfs = run_after_bg_subtraction(psfs)
+
+  for r in psfs:
+    print("max  min   ratio")
+    print(fs.format(r.max(), r.min(), r.max()/r.min()))
+
+
+def set_boundary_to_zero_and_normalize(psf):
+  ss = slice_from_shape(psf.shape)
+  mask = np.ones(psf.shape, dtype=np.bool)
+  ss2 = patch.grow(ss, -1)
+  mask[ss2] = 0
+  psf = psf - psf[mask].max()
+  psf = psf.clip(min=0)
+  psf = psf / psf.sum(keepdims=True)
+  return psf
+
+def reshape_and_process_psf(psf):
+  ## normalize
+  psf = psf / psf.sum()
+  ## first make voxel size isotropic
+  psf = block_reduce(psf,(2,1,1),np.mean)
+  ## then get anisotropic part of psf
+  psf = process_single_psf(psf, w=40)
+  ## then scale psf so voxel size matches x,y dimensions of img006.
+  ds = 5
+  psf = block_reduce(psf,(ds,ds,ds),np.mean)
+  ## then set boundary to zero and renorm
+  psf = set_boundary_to_zero_and_normalize(psf)
+  return psf
+
+def run_after_bg_subtraction(psfs):
+  f = lambda idx: reshape_and_process_psf(psfs[idx[0]])
+  psfs = broadcast_nonscalar_func(f, psfs, '123')
+  return psfs
+
+def slice_from_shape(shape):
+  return [slice(0, s) for s in shape]
 
 ## plotting
 
@@ -201,3 +275,13 @@ def original():
   psf_aniso_centered_cropped = broadcast_nonscalar_func(center_psf_crop_and_get_aniso, psf, '123')
   np.save('data/measured_psfs', psf_aniso_centered_cropped)
 
+history = """
+
+## Tue Jun 19 11:09:13 2018
+
+Our images are too blurry after applying these psfs, so we're going to denoise them first.
+We guess the additive noise has the effect of making the psfs appear more flat and broad.
+We need to either denoise or do background subraction.
+
+
+"""
