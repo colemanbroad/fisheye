@@ -3,9 +3,53 @@ from segtools import cell_view_lib as view
 from segtools.render import max_three_sides
 from skimage.measure import block_reduce
 from scipy.ndimage.interpolation import shift
-from segtools.patchmaker import centered_slice
-
+# from segtools.patchmaker import centered_slice
+from segtools import cell_view_lib as view
+from segtools import render
+from segtools.patchmaker import slice_from_shape
 import ipdb
+
+## utils
+
+def diginorm(img):
+  "quantile based normalization. remap intensity values to index of quantile."
+  perc = np.percentile(img, np.linspace(0,100,min(1000,img.size//10)))
+  img = np.digitize(img, perc)
+  return img
+
+def entropy(psf):
+  print("Nans: ", np.isnan(psf).sum())
+  # ipdb.set_trace()
+  return -np.where(psf!=0, psf * np.log2(psf), 0).sum()
+
+def print_stats(psfs):
+  header = "{:>11s}  "*3
+  line = "{:+11.4E}  "*3
+  f = lambda mn,mx: (mx - mn) / mx
+  print(header.format("max", "min", "ratio"))
+  for r in psfs:
+    mx, mn = r.max(), r.min()
+    print(line.format(mx, mn, f(mn, mx)))
+    print("Entropy : ", entropy(r))
+
+## plotting
+
+def plot_xyzmax(img,ax=None):
+  gspec = matplotlib.gridspec.GridSpec(1,3)
+  if ax is None:
+    fig = plt.figure()
+  for i in [0,1,2]:
+    ax = plt.subplot(gspec[i])
+    ax.imshow(img.max(i))
+
+def show_psfs(psfs):
+  cat = np.concatenate
+  a = render.max_three_sides(psfs[0], axis=0)
+  b = render.max_three_sides(psfs[1], axis=0)
+  c = cat([a,b], 1)
+  view.imshowme(c)
+
+## single psf functions
 
 def split_psf(h0, gamma=1.):
   """
@@ -37,20 +81,74 @@ def split_psf(h0, gamma=1.):
 
   h_aniso = np.fft.ifftshift(np.fft.irfftn(h_aniso_f))[slice_pads]
   h_iso = h_iso[slice_pads]
-
   return h_iso, h_aniso
   
-def process_single_psf(psf, w=30):
-  # _, psf = split_psf(psf)
-  # c = idx[0]
+def center_crop_martin(x,dshape):
+  x_blur = blur(x,4)
+  ind = np.unravel_index(np.argmax(x_blur),x.shape)
+  ss = tuple(slice(i-s//2,i-s//2+s) for s,i in zip(dshape,ind))
+  return x[ss].copy()
+
+def recenter_psf(psf, w=40):
+  "recenter and crop to valid region."
   image_center    = np.array(psf.shape) / 2 - 0.5
   brightest_pixel = np.argwhere(psf == psf.max())[0] #+ 0.5
-  psf = shift(psf, image_center - brightest_pixel)
+  dr  = image_center - brightest_pixel
+  psf = shift(psf, dr)
   psf = psf.clip(min=0)
-  ss = centered_slice(image_center, w)
-  _, psf = split_psf(psf[ss])
+  # ss  = slice_from_shape(psf.shape)
+  # w   = min(np.array(psf.shape) / 2 - np.abs(dr))
+  # w += w%2
+  # assert w > 10
+  image_center    = np.array(psf.shape) / 2 - 0.5
+  ss  = patch.centered_slice(image_center, w)
+  psf = psf[ss]
   return psf
 
+def set_boundary_to_zero_and_normalize(psf):
+  ss = slice_from_shape(psf.shape)
+  mask = np.ones(psf.shape, dtype=np.bool)
+  ss2 = patch.grow(ss, -1)
+  mask[ss2] = 0
+  psf = psf - psf[mask].max()
+  psf = psf.clip(min=0)
+  psf = psf / psf.sum(keepdims=True)
+  return psf
+
+def reshape_and_process_psf(psf, w=40):
+  ## first make voxel size isotropic
+  psf = block_reduce(psf, (2,1,1), np.mean)
+  ## denoise hevily ;)
+  psf = gputools.denoise.nlm3(psf, 15, 2, 3)
+  ## then remove background
+  psf = set_boundary_to_zero_and_normalize(psf)
+  # psf = np.maximum(psf-np.percentile(psf,30),0)
+  ## recenter psf 
+  psf = recenter_psf(psf, w=w)
+  ## split into iso/anio, only keep aniso
+  _, psf = split_psf(psf)
+  psf = psf.clip(min=0)
+  ## then scale psf so voxel size matches x,y dimensions of img006.
+  # ds = 5
+  # psf = block_reduce(psf,(ds,ds,ds),np.mean)
+  psf /= psf.sum()
+  return psf
+
+## multi-channel psfs functions
+
+ 
+## global entry
+
+def load_memimg():
+  "just for fun... full quantile norm really highlights background noise!"
+  img = imread('../carine_smFISH_seg/imgs/20150915_timeseries_aldob_apoeb_1_29_MembraneMiddle_predict__two.tif')
+  mask = np.isnan(img)
+  img[mask] = 0
+  img = img[0]
+  img = diginorm(img)
+  return img
+
+@DeprecationWarning
 def load_crop_run():
   """
   First load the data. normalize. center, crop, get_anisotropic for each channel independently.
@@ -84,80 +182,29 @@ def load():
   return psfs
 
 def try_various_bg_subtraction():
-  ## percentile
-  psfs = load()
-  psfs = psfs - np.percentile(psfs, 2, axis=(1,2,3), keepdims=True)
-  psfs = psfs.clip(min=0)
-  psfs = run_after_bg_subtraction(psfs)
+  if False:
+    ## percentile
+    psfs = load()
+    psfs = psfs - np.percentile(psfs, 2, axis=(1,2,3), keepdims=True)
+    psfs = psfs.clip(min=0)
+    psfs = run_after_bg_subtraction(psfs)
+    print_stats(psfs)
 
-  fs = "{:+8.4E}  "*3
-
-  for r in psfs:
-    print("max  min   ratio")
-    print(fs.format(r.max(), r.min(), r.max()/r.min()))
-    plot_xyzmax(r)
-
-  ## global spatial min. channel independent.
-  psfs = load()
-  psfs = psfs - psfs.min(axis=(1,2,3), keepdims=True)
-  psfs = run_after_bg_subtraction(psfs)
-
-  for r in psfs:
-    print("max  min   ratio")
-    print(fs.format(r.max(), r.min(), r.max()/r.min()))
+    ## global spatial min. channel independent.
+    psfs = load()
+    psfs = psfs - psfs.min(axis=(1,2,3), keepdims=True)
+    psfs = run_after_bg_subtraction(psfs)
+    print_stats(psfs)
 
   ## set boundary
   psfs = load()
-  psfs = [set_boundary_to_zero_and_normalize(psfs[c]) for c in [0,1]]
-  psfs = np.array(psfs)
+  # psfs = [set_boundary_to_zero_and_normalize(psfs[c]) for c in [0,1]]
+  # psfs = np.array(psfs)
   psfs = run_after_bg_subtraction(psfs)
-
-  for r in psfs:
-    print("max  min   ratio")
-    print(fs.format(r.max(), r.min(), r.max()/r.min()))
-
-
-def set_boundary_to_zero_and_normalize(psf):
-  ss = slice_from_shape(psf.shape)
-  mask = np.ones(psf.shape, dtype=np.bool)
-  ss2 = patch.grow(ss, -1)
-  mask[ss2] = 0
-  psf = psf - psf[mask].max()
-  psf = psf.clip(min=0)
-  psf = psf / psf.sum(keepdims=True)
-  return psf
-
-def reshape_and_process_psf(psf):
-  ## normalize
-  psf = psf / psf.sum()
-  ## first make voxel size isotropic
-  psf = block_reduce(psf,(2,1,1),np.mean)
-  ## then get anisotropic part of psf
-  psf = process_single_psf(psf, w=40)
-  ## then scale psf so voxel size matches x,y dimensions of img006.
-  ds = 5
-  psf = block_reduce(psf,(ds,ds,ds),np.mean)
-  ## then set boundary to zero and renorm
-  psf = set_boundary_to_zero_and_normalize(psf)
-  return psf
-
-def run_after_bg_subtraction(psfs):
-  f = lambda idx: reshape_and_process_psf(psfs[idx[0]])
-  psfs = broadcast_nonscalar_func(f, psfs, '123')
+  print_stats(psfs)
+  show_psfs(psfs)
+  np.save('data/measured_psfs.npy', psfs)
   return psfs
-
-def slice_from_shape(shape):
-  return [slice(0, s) for s in shape]
-
-## plotting
-
-def plot_xyzmax(img,ax=None):
-  gspec = matplotlib.gridspec.GridSpec(1,3)
-  if ax is None:
-    fig = plt.figure()
-  for i in [0,1,2]:
-    ax = plt.subplot(gspec[i])
-    ax.imshow(img.max(i))
 
 ## original script before refactor
 
@@ -282,6 +329,37 @@ history = """
 Our images are too blurry after applying these psfs, so we're going to denoise them first.
 We guess the additive noise has the effect of making the psfs appear more flat and broad.
 We need to either denoise or do background subraction.
+
+We have three techniques for bg subtraction:
+1. subtract global min
+2. subtract 2nd percentile and clip min to zero
+3. subtract max over boundary pixels and clip min to zero
+
+After consulting w Martin he recommended using denoising AND bg subtraction.
+This produces reasonable looking psfs.
+
+Now we have to think about how to do the scaling at the very end.
+Really, this should be the responsibility of whoever wants to use this psf for their images.
+They just have to know the voxel size of the psf, then scale/subsample as appropriate for their images.
+
+Avg pooling or subsampling?
+
+First, we shouldn't be averaging or subsampling for img006, because the isotropic voxel size of our
+psfs already matches up with the voxel size of the x,y dimensions of img006.
+
+*Do we want to make the z-dimension match up with the z-dimension of img006?*
+
+Yes, probably. And we should use downsampling, not avg-pooling, because this is more in line with
+what happens during microscopy.
+
+## Wed Jun 20 11:39:25 2018
+
+Remove 5x downsampling.
+The data should be *subsampled* s.t. the voxel shapes of the psf and the image align.
+The voxel shapes of the *rotated* psf and the image should align!
+The image img006_noconv has 0.1x0.1x0.5 µm voxel spacing. Our psf should have 0.5x0.1x0.1 before rotation.
+This problem is now exclusively in the hands of `generate_artificial_xz_slices.py`. 
+We'll provide exclusively isotropic 0.1um, unrotated psfs.
 
 
 """

@@ -120,8 +120,6 @@ def tilez(img, ncols=8, ds=1):
       res[ss] = img[i]
   return res
 
-
-
 def labels2nhl(lab):
   lab[lab!=1] = 2
   lab[lab==2] = 0
@@ -133,8 +131,6 @@ def join_pimg_to_imgwlabs(imgwlabs, pimg):
   pimg = pimg.transpose((0,1,4,2,3))
   res = np.concatenate([imgwlabs, pimg], axis=2)
   return res
-
-
 
 def ax2dict(axes):
   d = SortedDict()

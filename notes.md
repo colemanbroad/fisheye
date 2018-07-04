@@ -6,7 +6,7 @@
     C2 - nuclei segmentation
     C3 - segmentation dividing cells
     C4 - nuclear envelope
-    C5 - segmentation nuclear envelope 
+    C5 - segmentation nuclear envelope
     - has no time. just a single confocal stack
 `img2.tif` from `xwingdatafish_forcoleman.tif`
     - blurry, untrackable Xwing data with x,y,z,t,c=1
@@ -17,7 +17,7 @@
 `img5.tif` from `20150611_injHSLAP_HSH2B_28-30hpfOn_5min_ROI1_REG-1.tif`
     blurry, sparse, with time, SPIM, nuclear stain.
 `img6.tif` from 
-    `20_12_17_multiview H2B_RFP&BFP_Lap2bGFP_fish6_Multiview_RIF_Subset.czi`
+    `/Volumes/myersspimdata/Mauricio/for_coleman/test_lap2b_H2BGFP_H2BRFP/20_12_17_multiview H2B_RFP&BFP_Lap2bGFP_fish6_Multiview_RIF_Subset.czi` 
     XYCZT. nuclear envelope and nuclear volume markers. Confocal w 5min time res. 400x400 crop from x,y = 600,900 (or 600,950?) Saving to tif reshapes to TZCYX.
 `img6_t0_zup.npy` is img6, but only the first timepoint and with the z axis cubically interpolated to scale the axis by a factor of ≈5.
 `res042`, `res043` we see the cell membrane even during Meta/Ana - phase?

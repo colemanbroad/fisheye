@@ -44,12 +44,23 @@ def load_img():
   img = img[[0]]
   return img
 
+def load_isonet_result():
+  img = np.load('isonet_psf_1/restored.npy')
+
 def load_img__apply_psf():
+  img = load_img()
   kernel = load_kernel__rotate__scale()
+  kernel = np.zeros(20)
+  kernel[7:13] = 1/6
+  # hx = gaussian(21, 3.0)
+
   def func(ind):
-    t,c = ind
-    return fftconvolve(img[t,c], kernel[c], mode='same')
-  img = broadcast_nonscalar_func(func, img, '234')
+    t,c,z,y = ind
+    # res = fftconvolve(img[t,c,z,y], kernel[c], mode='same')
+    res = convolve(img[t,c,z,y,:], kernel)
+    return res
+  img = broadcast_nonscalar_func(func, img, '4')
+  noise = np.random.poisson(img)
   return img
 
 def load_kernel__rotate__scale():
@@ -63,7 +74,7 @@ def load_kernel__rotate__scale():
   kernel = rotate(kernel, 90, axes=(1,3))
   ## then downsample z (used to be x) s.t. voxel sizes agree w image
   ## take 0.1um z dim -> 0.5um to match image. see [^2].
-  kernel = zoom(kernel,(1,1./5,1,1,1), order=0)
+  kernel = zoom(kernel,(1,1./5,1,1), order=0)
   kernel = kernel / kernel.sum((1,2,3), keepdims=True)
   print(kernel.shape)
   return kernel
@@ -104,6 +115,23 @@ def compare3(img=None, img2=None):
   print(x1.shape, x2.shape, x3.shape)
   cat = np.concatenate
   view.imshowme(cat([x1,x2,x3],0))
+
+def compare4(img=None, img2=None):
+  if img is None: img  = load_img()
+  if img2 is None: img2 = load_img__apply_psf()
+  t,c = 0,0
+  x_ind = 302 #random.randint(0,400)
+  x1 =  img[t,c,:,x_ind] # true xz
+  z_ind = 34 #random.randint(0,71)
+  x2 =  img[t,c,z_ind,:,::5].T # artifical. downsampled x
+  x3 = img2[t,c,z_ind,:,::5].T # artificial. aniso blur + downsampled x.
+  print(x1.shape, x2.shape, x3.shape)
+  cat = np.concatenate
+  res = cat([x1,x2,x3],0)
+  # view.imshowme(res)
+  print(res.max(), res.min())
+  open_in_preview(res, rm_old=True)
+
 
 def downsample_and_plot(img):
   ss = random_inds_from_axis(img.shape, 2, 8)
@@ -275,6 +303,17 @@ I've checked the kernels after rotation and downsampling. They appear correct.
 x width is long. y is medium. z is very short.
 
 let's make line plots to look at the differences between artificial and real XZ slices.
+
+After meeting with Uwe and Martin we've decided that we have no idea why the psfs are so blurry,
+But the anisotropic part of the psf is clearly too wide. and even too long!
+But we could just play around with e.g. the gamma parameter to extract a psf that better fits our needs.
+But instead of doing this we should probably just use a simple theoretical anisotropic psf like a blurred line.
+This is simpler and has fewer params that require justification.
+
+## Mon Jun 25 10:47:20 2018
+
+We can easily open images with preview with the segtools function `open_in_preview`.
+
 
 
 
