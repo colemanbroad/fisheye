@@ -1,35 +1,39 @@
 # %load_ext autoreload
 # %autoreload 2
-from ipython_remote_defaults import *
+from segtools.defaults.ipython_remote import *
 
-from train_defaults import *
+from segtools.defaults.training import *
+import pandas as pd
 
 homedir = Path('/projects/project-broaddus/fisheye/')
-sys.path.insert(0, str(homedir))
+# sys.path.insert(0, str(homedir))
 
 ## note: all paths are relative to project home directory
 try:
   loadpath = Path(sys.argv[1])
-  print("LOAD DIR:", loadpath)
   savepath = Path(sys.argv[2])
+  print("LOAD DIR:", loadpath)
   print("SAVE DIR:", savepath)
 except:
-  print("ipython?")
-  loadpath = Path(input("loadpath?"))
-  savepath = Path(input("savepath?"))
+  print("Missing command line Path args. Falling back to `test` directory.")
+  loadpath = Path('training/test/')
+  savepath = Path('training/test/')
+  # loadpath = Path(input("loadpath?"))
+  # savepath = Path(input("savepath?"))
 
 ## boolean params for control flow
 TRAIN = False
-PREDICT = True
+PREDICT = False 
 PIMG_ANALYSIS = True
 INSTANCE_SEG = True
 INSTANCE_ANALYSIS = True
+TRACKING = True
 # RERUN = not TRAIN  # and PREDICT and PIMG_ANALYSIS and INSTANCE_ANALYSIS)
 
 ## boolean model params
 border_weights = True
 dist_channel = False
-blur = False
+blur = True
 xyz_ensemble = True
 
 ## define input channels
@@ -62,12 +66,17 @@ unet_params = {
   'dropout_fraction' : 0.2,
   'kern_width' : 3,
 }
-n_epochs  = 50
+n_epochs  = 200
 batchsize = 3
 
 
-## hyperopt optimization info
-n_evals = 10
+## segmentation and hyperopt optimization info
+
+stack_segmentation_function = lambda x,p : stackseg.flat_thresh_two_chan(x, **p)
+segmentation_params = {'nuc_mask':0.51, 'mem_mask':0.1}
+segmentation_info  = {'name':'flat_thresh_two_chan', 'param0':'nuc_mask', 'param1':'mem_mask'}
+
+stack_segmentation_function = lambda x,p : stackseg.watershed_memdist(x, **p)
 segmentation_space = {'nuc_mask' :ho.hp.uniform('nuc_mask', 0.3, 0.7),
                        'nuc_seed':ho.hp.uniform('nuc_seed', 0.9, 1.0),
                        'mem_mask':ho.hp.uniform('mem_mask', 0.0, 0.3),
@@ -76,26 +85,17 @@ segmentation_space = {'nuc_mask' :ho.hp.uniform('nuc_mask', 0.3, 0.7),
                        'compactness' : 0, #hp.uniform('compactness', 0, 10),
                        'connectivity': 1, #hp.choice('connectivity', [1,2,3]),
                        }
-segmentation_info  = {'name':'watershed_two_chan', 'param0':'nuc_mask', 'param1':'dist_cut'}
-segmentation_info  = {'name':'flat_thresh_two_chan', 'param0':'nuc_mask', 'param1':'mem_mask'}
-
-
-
-
-
-stack_segmentation_function = lambda x,p : stackseg.flat_thresh_two_chan(x, **p)
-segmentation_params = {'nuc_mask':0.51, 'mem_mask':0.1}
-
-stack_segmentation_function = lambda x,p : stackseg.watershed_memdist(x, **p)
 segmentation_params = {'dist_cut': 9.780390266161866, 'mem_mask': 0.041369622211090654, 'nuc_mask': 0.5623125724186882, 'nuc_seed': 0.9610987296474213}
 
 stack_segmentation_function = lambda x,p : stackseg.watershed_two_chan(x, **p)
 segmentation_params = {'nuc_mask':0.51, 'nuc_seed':0.98}
+segmentation_params = None
+segmentation_space = {'nuc_mask' :ho.hp.uniform('nuc_mask', 0.3, 0.7),
+                      'nuc_seed':ho.hp.uniform('nuc_seed', 0.9, 1.0), 
+                      }
+segmentation_info  = {'name':'watershed_two_chan', 'param0':'nuc_mask', 'param1':'nuc_seed'}
 
-## set to None to redo optimization
-# segmentation_params = None
-
-
+n_evals = 40
 
 def condense_labels(lab):
   lab[lab==0]   = ch_bg
@@ -107,11 +107,16 @@ def condense_labels(lab):
 
 ## load data
 # img = imread(str(homedir / 'data/img006.tif'))
-# img = np.load(str(homedir / 'data/img006_noconv.npy'))
-img = np.load(str(homedir / 'isonet/restored.npy'))
-img = img[np.newaxis,:352,...]
-lab = np.load(str(homedir / 'data/labels_iso_t0.npy'))
-lab = lab[np.newaxis,:352,...]
+
+img = np.load(str(homedir / 'data/img006_noconv.npy'))
+lab = imread(str(homedir / 'data/labels_lut.tif'))[:,:,0]
+
+if False:
+  img = np.load(str(homedir / 'isonet/restored.npy'))
+  img = img[np.newaxis,:352,...]
+  lab = np.load(str(homedir / 'data/labels_iso_t0.npy'))
+  lab = lab[np.newaxis,:352,...]
+
 lab = condense_labels(lab)
 ## TODO: this will break once we start labeling XZ and YZ in same volume.
 mask_labeled_slices = lab.min((2,3)) < 2
@@ -127,7 +132,8 @@ def split_train_vali():
   ys = lab[mask_labeled_slices].copy()
   xs = []
   for t,z in inds_labeled_slices.T:
-    res = ll.add_z_to_chan(img[t], dz, ind=z)
+    res = unet.add_z_to_chan(img[t], dz, ind=z)
+    res = perm(res, "ZCYX", "ZYXC")
     xs.append(res[0])
   xs = np.array(xs)
 
@@ -328,7 +334,7 @@ def predict_on_new():
     # for ax in ["ZYXC", "YXZC", "XZYC"]:
     for ax in ["ZYXC"]: #, "YXZC", "XZYC"]:
       x = perm(img[t], "ZCYX", ax)
-      x = ll.add_z_to_chan(x, dz, axes="ZYXC") # lying about direction of Z!
+      x = unet.add_z_to_chan(x, dz, axes="ZYXC") # lying about direction of Z!
       print(x.shape)
       x = x / x.mean((1,2), keepdims=True)
       pimg = net.predict(x, batch_size=1)
@@ -467,6 +473,10 @@ def optimize(pimg):
     plt.savefig(mypath_opt / (filename + '.png'))
   save_img()
 
+  from hyperopt.plotting import main_plot_vars
+  from hyperopt.plotting import main_plot_history
+  from hyperopt.plotting import main_plot_histogram
+
   plt.figure()
   ho.plotting.main_plot_histogram(trials=trials)
   plt.savefig(mypath_opt / 'hypopt_histogram.pdf')
@@ -530,7 +540,6 @@ def optimize(pimg):
 
   return best
 
-
 if INSTANCE_SEG:
   pimg = np.load(loadpath / 'pimg.npy')
 
@@ -568,7 +577,9 @@ if INSTANCE_SEG:
     im1 = img_slices[ids[i],ch_nuc_img,]
     im2 = pre_slices[ids[i]]
     im3 = gt_slices[ids[i]]
-    ax = plotting.make_comparison_image(im1,im2,im3,ax=ax)
+    psg = ss.pixel_sharing_bipartite(im3, im2)
+    matching = ss.matching_iou(psg, fraction=0.5)
+    ax = plotting.make_comparison_image(im1,im2,im3,matching,ax=ax)
     # res.append(ax.get_array())
     ax.set_axis_off()
   fig.set_size_inches(10, 10, forward=True)
@@ -580,7 +591,7 @@ if INSTANCE_ANALYSIS:
   hyp = np.load(loadpath / 'hyp.npy')
   ## look at cell shape statistics
   print("GENERATE NHLS FROM HYP AND ANALYZE")
-  nhls = seglib.labs2nhls(hyp, img[:,:352,ch_nuc_img], simple=False)
+  nhls = nhl_tools.labs2nhls(hyp, img[:,:,ch_nuc_img])
   pickle.dump(nhls, open(savepath / 'nhls.pkl', 'wb'))
 
   plt.figure()
@@ -592,6 +603,19 @@ if INSTANCE_ANALYSIS:
   plt.savefig(savepath / 'cell_sizes.pdf')
   loadpath = savepath
   print("INSTANCE ANALYSIS COMPLETE")
+
+if TRACKING:
+  nhls = pickle.load(open(loadpath / 'nhls.pkl', 'rb'))
+  assert len(nhls) > 1
+  factory = tt.TrackFactory(knn_dub=50, edge_scale=50)
+  alltracks = [factory.nhls2tracking(nhls[i:i+2]) for i in range(len(nhls)-1)]
+  tr = tt.compose_trackings(factory, alltracks, nhls)
+  with open(savepath / 'stats_tr.txt','w') as f:
+    with redirect_stdout(f):
+      tt.stats_tr(tr)
+  cost_stats = '\n'.join(tt.cost_stats_lines(factory.graph_cost_stats))
+  print(cost_stats, file=open(savepath / 'cost_stats.txt','w'))
+
 
 #hi coleman! keep coding!
 #best, romina :)

@@ -1,7 +1,11 @@
-from segtools.defaults.ipython_local import *
+from segtools.defaults.ipython_remote import *
 # from ipython_remote_defaults import *
 from segtools.defaults.training import *
+from contextlib import redirect_stdout
 import ipdb
+import pandas as pd
+
+## data loading and param definitions
 
 def channel_semantics():
   d = dict()
@@ -32,6 +36,39 @@ def class_semantics():
   d['rgb.div'] =  [d['div'], d['mem'], d['div']]
   return d
 
+def segparams():
+  # stack_segmentation_function = lambda x,p : stackseg.flat_thresh_two_chan(x, **p)
+  # segmentation_params = {'nuc_mask':0.51, 'mem_mask':0.1}
+  # segmentation_info  = {'name':'flat_thresh_two_chan', 'param0':'nuc_mask', 'param1':'mem_mask'}
+
+  # stack_segmentation_function = lambda x,p : stackseg.watershed_memdist(x, **p)
+  # segmentation_space = {'nuc_mask' :ho.hp.uniform('nuc_mask', 0.3, 0.7),
+  #                        'nuc_seed':ho.hp.uniform('nuc_seed', 0.9, 1.0),
+  #                        'mem_mask':ho.hp.uniform('mem_mask', 0.0, 0.3),
+  #                        'dist_cut':ho.hp.uniform('dist_cut', 0.0, 10),
+  #                        # 'mem_seed':hp.uniform('mem_seed', 0.0, 0.3),
+  #                        'compactness' : 0, #hp.uniform('compactness', 0, 10),
+  #                        'connectivity': 1, #hp.choice('connectivity', [1,2,3]),
+  #                        }
+  # segmentation_params = {'dist_cut': 9.780390266161866, 'mem_mask': 0.041369622211090654, 'nuc_mask': 0.5623125724186882, 'nuc_seed': 0.9610987296474213}
+
+  stack_segmentation_function = lambda x,p : stackseg.watershed_two_chan(x, **p)
+  segmentation_params = {'nuc_mask':0.51, 'nuc_seed':0.98}
+  # segmentation_params = None
+  segmentation_space = {'nuc_mask' :ho.hp.uniform('nuc_mask', 0.3, 0.7),
+                        'nuc_seed':ho.hp.uniform('nuc_seed', 0.9, 1.0), 
+                        }
+  segmentation_info  = {'name':'watershed_two_chan', 'param0':'nuc_mask', 'param1':'nuc_seed'}
+
+  res = dict()
+  res['function'] = stack_segmentation_function
+  res['params'] = segmentation_params
+  res['space'] = segmentation_space
+  res['info'] = segmentation_info
+  res['n_evals'] = 40 ## must be greater than 2 or hyperopt throws errors
+  res['blur'] = False
+  return res
+
 def load_rawdata(homedir):
   homedir = Path(homedir)
 
@@ -61,11 +98,6 @@ def load_rawdata(homedir):
   ## TODO: this will break once we start labeling XZ and YZ in same volume.
   mask_labeled_slices = lab.min((2,3)) < 2
   inds_labeled_slices = np.indices(mask_labeled_slices.shape)[:,mask_labeled_slices]
-  def lab2instance(x):
-    d = cs
-    x[x!=d['nuc']] = 0
-    x = label(x)[0]
-    return x
   gt_slices = np.array([lab2instance(x) for x in lab[inds_labeled_slices[0], inds_labeled_slices[1]]])
 
   res = dict()
@@ -188,6 +220,14 @@ def build_trainable(rawdata):
 
   return res
 
+## utility functions (called internally)
+
+def lab2instance(x):
+  d = class_semantics()
+  x[x!=d['nuc']] = 0
+  x = label(x)[0]
+  return x
+
 def random_augmentation_xy(xpatch, ypatch, train=True):
   if random.random()<0.5:
       xpatch = np.flip(xpatch, axis=1)
@@ -213,6 +253,20 @@ def random_augmentation_xy(xpatch, ypatch, train=True):
   xpatch = xpatch.clip(min=0)
   xpatch = xpatch/xpatch.mean((0,1))
   return xpatch, ypatch
+
+def convolve_zyx(pimg, axes="tzyxc"):
+  assert pimg.ndim == 5
+  pimg = perm(pimg, axes, "tzyxc")
+  weights = np.full((3, 3, 3), 1.0/27)
+  pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
+  pimg = np.array(pimg)
+  pimg = pimg.transpose((0,2,3,4,1))
+  pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
+  pimg = np.array(pimg)
+  pimg = pimg.transpose((0,2,3,4,1))
+  return pimg
+
+## actions
 
 def train(trainable, savepath):
   xs_train = trainable['xs_train']
@@ -265,7 +319,52 @@ def train(trainable, savepath):
   net.save_weights(savepath / 'w002.h5')
   return history
 
-def show_trainvali(trainable):
+## require trained network
+
+def predict_on_new(net,img):
+  assert img.ndim == 5 ## TZYXC
+  stack = []
+  dz = channel_semantics()['dz']
+  ntimes = img.shape[0]
+  for t in range(ntimes):
+    timepoint = []
+    # for ax in ["ZYXC", "YXZC", "XZYC"]:
+    for ax in ["ZYXC"]: #, "YXZC", "XZYC"]:
+      x = perm(img[t], "ZCYX", ax)
+      x = unet.add_z_to_chan(x, dz, axes="ZYXC") # lying about direction of Z!
+      print(x.shape)
+      x = x / x.mean((1,2), keepdims=True)
+      pimg = net.predict(x, batch_size=1)
+      pimg = pimg.astype(np.float16)
+      pimg = perm(pimg, ax, "ZYXC")
+      # qsave(collapse(splt(pimg[:64,::4,::4,rgbdiv],8,0),[[0,2],[1,3],[4]]))
+      timepoint.append(pimg)
+    timepoint = np.array(timepoint)
+    timepoint = timepoint.mean(0)
+    stack.append(timepoint)
+  stack = np.array(stack)
+  return stack
+
+def predict_train_vali(trainable, savepath=None):
+  net = trainable['net']
+  xs_train = trainable['xs_train']
+  xs_vali = trainable['xs_vali']
+  rgbmem = class_semantics()['rgb.mem']
+  pred_xs_train = net.predict(xs_train)
+  rows, cols = rowscols(pred_xs_train.shape[0], 8)
+  res1 = collapse(splt(pred_xs_train[:cols*rows,...,rgbmem],rows,0), [[0,2],[1,3],[4]])
+  if savepath:
+    io.imsave(savepath / 'pred_xs_train.png', res1)
+  pred_xs_vali = net.predict(xs_vali)
+  rows, cols = rowscols(pred_xs_vali.shape[0], 5)
+  res2 = collapse(splt(pred_xs_vali[:cols*rows,...,rgbmem],rows,0), [[0,2],[1,3],[4]])
+  if savepath:
+    io.imsave(savepath / 'pred_xs_vali.png', res2)
+  return res1, res2
+
+## plotting
+
+def show_trainvali(trainable, savepath=None):
   xs_train = trainable['xs_train']
   xs_vali = trainable['xs_vali']
   ys_train = trainable['ys_train']
@@ -291,11 +390,13 @@ def show_trainvali(trainable):
   res = multicat([[xt,xv,2], [yt,yv,2], 2])
   res = res[:,::2,::2]
   res = merg(res, 0) #[[0,1],[2],[3]])
-  # io.imsave(savepath / 'train_vali_ex.png', res)
+  if savepath:
+    io.imsave(savepath / 'train_vali_ex.png', res)
   return res
 
-def plot_history(history, savepath):
-  print(history.history, file=open(savepath / 'history.txt','w'))
+def plot_history(history, savepath=None):
+  if savepath:
+    print(history.history, file=open(savepath / 'history.txt','w'))
   def plot_hist_key(k):
     plt.figure()
     y1 = history.history[k]
@@ -303,75 +404,19 @@ def plot_history(history, savepath):
     plt.plot(y1, label=k)
     plt.plot(y2, label='val_' + k)
     plt.legend()
-    plt.savefig(savepath / (k + '.png'))
+    if savepath:
+      plt.savefig(savepath / (k + '.png'))
   plot_hist_key('loss')
   plot_hist_key('acc')
 
-def run_training(homedir, savepath):
-  rawdata = load_rawdata(homedir)
-  trainable = build_trainable(rawdata)
-  net = trainable['net']
-  res = show_trainvali(trainable)
-  io.imsave(savepath / 'train_vali_ex.png', res)
-  history = train(trainable, savepath)
-  plot_history(history, savepath)
-  ## load best weights from previous training
-  net.load_weights(loadpath / 'w001.h5')
-  # loadpath = savepath
-  print("TRAIN COMPLETE")
+def max_z_divchan(pimg, savepath=None):
+  "max proj across z, then merg across time"
+  ch_div = ts.class_semantics()['div']
+  res = merg(pimg[:,...,ch_div].max(1),0)
+  io.imsave(savedir / 'max_z_divchan.png', res)
+  return res
 
-def predict_on_new(net,img,dz):
-  assert img.ndim == 5 ## TZYXC
-  pimg = []
-  ntimes = img.shape[0]
-  for t in range(ntimes):
-    timepoint = []
-    # for ax in ["ZYXC", "YXZC", "XZYC"]:
-    for ax in ["ZYXC"]: #, "YXZC", "XZYC"]:
-      x = perm(img[t], "ZCYX", ax)
-      x = unet.add_z_to_chan(x, dz, axes="ZYXC") # lying about direction of Z!
-      print(x.shape)
-      x = x / x.mean((1,2), keepdims=True)
-      pimg = net.predict(x, batch_size=1)
-      pimg = pimg.astype(np.float16)
-      pimg = perm(pimg, ax, "ZYXC")
-      # qsave(collapse(splt(pimg[:64,::4,::4,rgbdiv],8,0),[[0,2],[1,3],[4]]))
-      timepoint.append(pimg)
-    timepoint = np.array(timepoint)
-    timepoint = timepoint.mean(0)
-    pimg.append(timepoint)
-  pimg = np.array(pimg)
-  return pimg
-
-def predict_train_vali(trainable, savepath=None):
-  net = trainable['net']
-  xs_train = trainable['xs_train']
-  xs_vali = trainable['xs_vali']
-  rgbmem = class_semantics()['rgb.mem']
-  pred_xs_train = net.predict(xs_train)
-  rows, cols = rowscols(pred_xs_train.shape[0], 8)
-  res1 = collapse(splt(pred_xs_train[:cols*rows,...,rgbmem],rows,0), [[0,2],[1,3],[4]])
-  if savepath:
-    io.imsave(savepath / 'pred_xs_train.png', res1)
-  pred_xs_vali = net.predict(xs_vali)
-  rows, cols = rowscols(pred_xs_vali.shape[0], 5)
-  res2 = collapse(splt(pred_xs_vali[:cols*rows,...,rgbmem],rows,0), [[0,2],[1,3],[4]])
-  if savepath:
-    io.imsave(savepath / 'pred_xs_vali.png', res2)
-  return res1, res2
-
-def run_predict_on_new(loaddir, savedir):
-  unet_params = json.load(open(loaddir / 'unet_params.json', 'r'))
-  net = unet.get_unet_n_pool(**unet_params)
-  net.load_weights(str(loaddir / 'w001.h5'))
-  img = np.load('data/img006_noconv.npy')
-  dz = channel_semantics()['dz']
-  pimg = predict_on_new(net, img, dz)
-  np.save(savedir / 'pimg', pimg)
-  loaddir = savedir
-  print("PREDICT COMPLETE")
-
-def showresults(pimg, rawdata):
+def show_results(pimg, rawdata, savepath=None):
   img = rawdata['img']
   lab = rawdata['lab']
   inds = rawdata['inds_labeled_slices']
@@ -392,9 +437,11 @@ def showresults(pimg, rawdata):
     return r
   x,y,z = f(x), f(y), f(z)
   res = np.concatenate([x,y,z], axis=1)
+  if savepath:
+    io.imsave(savepath / 'results.png', res)
   return res
 
-def find_divisions(pimg):
+def find_divisions(pimg, savepath=None):
   ch_div = class_semantics()['div']
   rgbdiv = class_semantics()['rgb.div']
   x = pimg.astype(np.float32)
@@ -409,23 +456,233 @@ def find_divisions(pimg):
   x2 = x2[::4,::4,rgbdiv]
   # x2[...,0] *= 40 ## enhance division channel color!
   # x2 = np.clip(x2, 0, 1)
+  if savepath:
+    io.imsave(savepath / 'find_divisions.png', x2)
   return x2
 
-def run_pimg_analysis(homedir, loaddir, savedir):
-  pimg = np.load(loaddir / 'pimg.npy')
-  # homedir = './'
-  rawdata = load_rawdata(homedir)
-  res = showresults(pimg, rawdata)
-  io.imsave(savedir / 'results.png', res)
-  ## max division channel across z
-  ch_div = class_semantics()['div']
-  io.imsave(savedir / 'max_z_divchan.png', merg(pimg[:,...,ch_div].max(1),0))
-  if pimg.shape[0] > 1:
-    res = find_divisions(pimg)
-    io.imsave(savedir / 'find_divisions.png', res)
-  # loaddir = savedir
-  pimg = np.save(savedir / 'pimg.npy', pimg)
-  print("PIMG ANALYSIS COMPLETE")
+## run-style functions requiring
+
+def run_predict_on_new(loaddir, savedir):
+  unet_params = json.load(open(loaddir / 'unet_params.json', 'r'))
+  net = unet.get_unet_n_pool(**unet_params)
+  net.load_weights(str(loaddir / 'w001.h5'))
+  img = np.load('data/img006_noconv.npy')
+  dz = channel_semantics()['dz']
+  pimg = predict_on_new(net, img, dz)
+  np.save(savedir / 'pimg', pimg)
+  loaddir = savedir
+  print("PREDICT COMPLETE")
+
+def optimize_segmentation(pimg, rawdata, segparams, mypath_opt):
+  lab  = rawdata['lab']
+  inds = rawdata['inds_labeled_slices'][:,:-4]
+  ## recompute gt_slices! don't use gt_slices from rawdata
+  gt_slices = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  stack_segmentation_function = segparams['function']
+  segmentation_space = segparams['space']
+  segmentation_info = segparams['info']
+  n_evals = segparams['n_evals']
+  img_instseg = pimg[[0]]
+
+  ## optimization params
+  # mypath_opt = add_numbered_directory(savepath, 'opt')
+  
+  def risk(params):
+    print('Evaluating params:',params)
+    t0 = time()
+    hyp = np.array([stack_segmentation_function(x,params) for x in img_instseg])
+    hyp = hyp.astype(np.uint16)
+    pred_slices = hyp[inds[0], inds[1]]
+    res = np.array([ss.seg(x,y) for x,y in zip(gt_slices, pred_slices)])
+    t1 = time()
+    val = res.mean()
+    print("SEG: ", val)
+    return -val
+
+  ## perform the optimization
+
+  trials = ho.Trials()
+  best = ho.fmin(risk,
+      space=segmentation_space,
+      algo=ho.tpe.suggest,
+      max_evals=n_evals,
+      trials=trials)
+
+  pickle.dump(trials, open(mypath_opt / 'trials.pkl', 'wb'))
+  print(best)
+
+  losses = [x['loss'] for x in trials.results if x['status']=='ok']
+  df = pd.DataFrame({**trials.vals})
+  df = df.iloc[:len(losses)]
+  df['loss'] = losses
+
+  ## save the results
+
+  def save_img():
+    plt.figure()
+    # plt.scatter(ps[0], ps[1], c=values)
+    n = segmentation_info['name']
+    p0 = segmentation_info['param0']
+    p1 = segmentation_info['param1']
+    x = np.array(trials.vals[p0])
+    y = np.array(trials.vals[p1])
+    c = np.array([t['loss'] for t in trials.results if t.get('loss',None) is not None])
+    plt.scatter(x[:c.shape[0]],y[:c.shape[0]],c=c)
+    plt.title(n)
+    plt.xlabel(p0)
+    plt.ylabel(p1)
+    plt.colorbar()
+    filename = '_'.join([n,p0,p1])
+    plt.savefig(mypath_opt / (filename + '.png'))
+  save_img()
+
+  from hyperopt.plotting import main_plot_vars
+  from hyperopt.plotting import main_plot_history
+  from hyperopt.plotting import main_plot_histogram
+
+  plt.figure()
+  main_plot_histogram(trials=trials)
+  plt.savefig(mypath_opt / 'hypopt_histogram.pdf')
+
+  plt.figure()
+  main_plot_history(trials=trials)
+  plt.savefig(mypath_opt / 'hypopt_history.pdf')
+
+  domain = ho.base.Domain(risk, segmentation_space)
+
+  plt.figure()
+  main_plot_vars(trials=trials, bandit=domain)
+  plt.tight_layout()
+  plt.savefig(mypath_opt / 'hypopt_vars.pdf')
+
+  plt.figure()
+  g = sns.PairGrid(df) #, hue="connectivity")
+  # def hist(x, **kwargs):
+  #   plt.hist(x, stacked=True, **kwargs)
+  g.map_diag(plt.hist)
+  g.map_upper(plt.scatter)
+  g.map_lower(sns.kdeplot, cmap="Blues_d")
+  # g.map(plt.scatter)
+  g.add_legend();
+  plt.savefig(mypath_opt / 'hypopt_seaborn_004.pdf')
+
+  if False:
+    plt.figure()
+    ax = plt.subplot(gspec[0])
+    sns.swarmplot(x='connectivity', y='loss', data=df, ax=ax)
+    ax = plt.subplot(gspec[1])
+    sns.swarmplot(x='nuc_mask', y='loss', data=df, ax=ax)
+    ax = plt.subplot(gspec[2])
+    sns.swarmplot(x='nuc_seed', y='loss', data=df, ax=ax)
+    ax = plt.subplot(gspec[3])
+    sns.swarmplot(x='compactness', y='loss', data=df, ax=ax)  
+    plt.savefig(mypath_opt / 'hypopt_seaborn_005.pdf')
+
+    fig = plt.figure(figsize=(16,4))
+    gspec = matplotlib.gridspec.GridSpec(1,4) #, width_ratios=[3,1])
+    # gspec.update(wspace=1, hspace=1)
+    cmap = np.array(sns.color_palette('deep'))
+    conn = df.connectivity.as_matrix()
+    colors = cmap[conn.flat].reshape(conn.shape + (3,))
+    ax0 = plt.subplot(gspec[0])
+    ax0.scatter(df["compactness"], df.loss, c=colors)
+    plt.ylabel('loss')
+
+    ax1 = plt.subplot(gspec[1], sharey=ax0)
+    ax1.scatter(df["nuc_mask"], df.loss, c=colors)
+    plt.setp(ax1.get_yticklabels(), visible=False)
+
+    ax2 = plt.subplot(gspec[2], sharey=ax0)
+    ax2.scatter(df["nuc_seed"], df.loss, c=colors)
+    plt.setp(ax2.get_yticklabels(), visible=False)
+    
+    ax3 = plt.subplot(gspec[3])
+    sns.swarmplot(x="connectivity", y="loss", data=df, ax=ax3)
+    plt.setp(ax3.get_yticklabels(), visible=False)
+    plt.savefig(mypath_opt / 'hypopt_seaborn_006.pdf')
+
+  return best
+
+def compute_seg_on_slices(hyp, rawdata):
+  print("COMPARE SEGMENTATION AGAINST LABELED SLICES")
+  inds_labeled_slices = rawdata['inds_labeled_slices']
+  lab = rawdata['lab']
+  img = rawdata['img']
+  inds = inds_labeled_slices[:,:-4] # use full
+  gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  pre_slices = hyp[inds[0], inds[1]]
+  seg_scores = np.array([ss.seg(x,y) for x,y in zip(gt_slices, pre_slices)])
+  # print({'seg': seg_scores.mean(), 'std':seg_scores.std()}, file=open(savepath / 'SEG.txt','w'))
+  return seg_scores
+
+def analyze_hyp(hyp, rawdata, segparams, savepath):
+  # pimg = np.load(loadpath / 'pimg.npy')
+  segmentation_params = segparams['params']
+  stack_segmentation_function = segparams['function']
+  inds = rawdata['inds_labeled_slices']
+  lab = rawdata['lab']
+  img = rawdata['img']
+  ch_nuc_img = channel_semantics()['ch_nuc_img']
+
+  np.save(savepath / 'hyp', hyp)
+
+  print("COMPARE SEGMENTATION AGAINST LABELED SLICES")
+  seg_scores = compute_seg_on_slices(hyp, rawdata)
+  print({'seg': seg_scores.mean(), 'std':seg_scores.std()}, file=open(savepath / 'SEG.txt','w'))
+  
+  print("CREATE DISPLAY GRID OF SEGMENTATION RESULTS")
+  img_slices = img[inds[0], inds[1]]
+  gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  pre_slices = hyp[inds[0], inds[1]]
+  gspec = matplotlib.gridspec.GridSpec(4, 4)
+  gspec.update(wspace=0., hspace=0.)
+  fig = plt.figure()
+  ids = np.arange(img_slices.shape[0])
+  # np.random.shuffle(ids)
+  ids = np.concatenate([ids[:24:2],ids[-4:]])
+  for i in range(16):
+    ax = plt.subplot(gspec[i])
+    im1 = img_slices[ids[i],ch_nuc_img]
+    im2 = pre_slices[ids[i]]
+    im3 = gt_slices[ids[i]]
+    psg = ss.pixel_sharing_bipartite(im3, im2)
+    matching = ss.matching_iou(psg, fraction=0.5)
+    ax = plotting.make_comparison_image(im1,im2,im3,matching,ax=ax)
+    # res.append(ax.get_array())
+    ax.set_axis_off()
+  fig.set_size_inches(10, 10, forward=True)
+  plt.savefig(savepath / 'seg_overlay.png',dpi=200, bbox_inches='tight')
+  
+  print("INSTANCE SEGMENTATION ANALYSIS COMPLETE")
+
+def build_nhl(hyp, rawdata, savepath):
+  print("GENERATE NHLS FROM HYP AND ANALYZE")
+  img = rawdata['img']
+  ch_nuc_img = channel_semantics()['ch_nuc_img']
+  nhls = nhl_tools.labs2nhls(hyp, img[:,:,ch_nuc_img])
+  pickle.dump(nhls, open(savepath / 'nhls.pkl', 'wb'))
+
+  plt.figure()
+  cm = sns.cubehelix_palette(len(nhls))
+  for i,nhl in enumerate(nhls):
+    areas = [n['area'] for n in nhl]
+    areas = np.log2(sorted(areas))
+    plt.plot(areas, '.', c=cm[i])
+  plt.savefig(savepath / 'cell_sizes.pdf')
+  print("INSTANCE ANALYSIS COMPLETE")
+  return nhls
+
+def track_nhls(nhls, savepath):
+  assert len(nhls) > 1
+  factory = tt.TrackFactory(knn_dub=50, edge_scale=50)
+  alltracks = [factory.nhls2tracking(nhls[i:i+2]) for i in range(len(nhls)-1)]
+  tr = tt.compose_trackings(factory, alltracks, nhls)
+  with open(savepath / 'stats_tr.txt','w') as f:
+    with redirect_stdout(f):
+      tt.stats_tr(tr)
+  cost_stats = '\n'.join(tt.cost_stats_lines(factory.graph_cost_stats))
+  print(cost_stats, file=open(savepath / 'cost_stats.txt','w'))
+  return tr
 
 
 
@@ -469,6 +726,8 @@ should split_train_vali be an inner function of load_source_target?
 ## Wed Jul  4 14:26:32 2018
 
 - finish porting train_and_seg into train_seg_lib
-  - 
-
+  - can train a trainable and save results
+  - can optimize a segmentation on a pimg w hyperopt
+  - all functions have been ported, all the way through tracking.
+  simple ipython scheme for calling train_seg_lib is trainseg_ipy.
 """
