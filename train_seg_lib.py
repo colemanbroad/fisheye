@@ -5,24 +5,77 @@ from contextlib import redirect_stdout
 import ipdb
 import pandas as pd
 
-## data loading and param definitions
+
+## utility functions (called internally)
+
+def lab2instance(x):
+  d = class_semantics()
+  x[x!=d['nuc']] = 0
+  x = label(x)[0]
+  return x
+
+def random_augmentation_xy(xpatch, ypatch, train=True):
+  if random.random()<0.5:
+      xpatch = np.flip(xpatch, axis=1)
+      ypatch = np.flip(ypatch, axis=1)
+  # if random.random()<0.5:
+  #     xpatch = np.flip(xpatch, axis=0)
+  #     ypatch = np.flip(ypatch, axis=0)
+  if random.random()<1:
+      # randangle = (random.random()-0.5)*60 # even dist between ± 30
+      randangle = 90 * random.randint(0,3)
+      xpatch  = rotate(xpatch, randangle, reshape=False, mode='reflect')
+      ypatch  = rotate(ypatch, randangle, reshape=False, mode='reflect')
+  # if train:
+  #   if random.random()<0.5:
+  #       delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
+  #       xpatch = augmentation.warp_multichan(xpatch, delta=delta)
+  #       ypatch = augmentation.warp_multichan(ypatch, delta=delta)
+  #   if random.random()<0.5:
+  #       m = random.random()*xpatch.mean() # channels already normed
+  #       s = random.random()*xpatch.std()
+  #       noise = np.random.normal(m/4,s/4,xpatch.shape).astype(xpatch.dtype)
+  #       xpatch += noise
+  xpatch = xpatch.clip(min=0)
+  xpatch = xpatch/xpatch.mean((0,1))
+  return xpatch, ypatch
+
+def convolve_zyx(pimg, axes="tzyxc"):
+  assert pimg.ndim == 5
+  pimg = perm(pimg, axes, "tzyxc")
+  weights = np.full((3, 3, 3), 1.0/27)
+  pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
+  pimg = np.array(pimg)
+  pimg = pimg.transpose((0,2,3,4,1))
+  pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
+  pimg = np.array(pimg)
+  pimg = pimg.transpose((0,2,3,4,1))
+  return pimg
+
+## param definitions
 
 def channel_semantics():
   d = dict()
   d['mem'] = 1
   d['nuc'] = 0
   d['n_channels'] = 2
-  ## define input channels
-  dz = 2
-  d['dz'] = dz
-  d['n_channels_xs'] = d['n_channels']*(1+2*dz)
-  d['ch_mem_xs'] = 2*dz # original, centered membrane channelk
-  d['ch_nuc_xs'] = 2*dz + 1
-  d['ch_mem_img'] = 0
-  d['ch_nuc_img'] = 1
-  d['rgb.img'] = [d['ch_mem_img'], d['ch_nuc_img'], d['ch_nuc_img']]
-  d['rgb.xs']  = [d['ch_mem_xs'], d['ch_nuc_xs'], d['ch_nuc_xs']]
+  d['rgb'] = [d['mem'], d['nuc'], d['nuc']]
   return d
+
+def xs_semantics():
+  ## define input channels
+  d = dict()
+  imgsem = channel_semantics()
+  if False:
+    dz = 2
+    d['dz'] = dz
+    d['n_channels'] = imgsem['n_channels']*(1+2*dz)
+    d['n_channels'] = 2
+    d['mem'] = 2*dz # original, centered membrane channelk
+    d['nuc'] = 2*dz + 1
+    d['rgb']  = [d['mem'], d['nuc'], d['nuc']]
+    return d
+  return imgsem
 
 def class_semantics():
   d = dict()
@@ -53,8 +106,7 @@ def segparams():
   # segmentation_params = {'dist_cut': 9.780390266161866, 'mem_mask': 0.041369622211090654, 'nuc_mask': 0.5623125724186882, 'nuc_seed': 0.9610987296474213}
 
   stack_segmentation_function = lambda x,p : stackseg.watershed_two_chan(x, **p)
-  segmentation_params = {'nuc_mask':0.51, 'nuc_seed':0.98}
-  # segmentation_params = None
+  segmentation_params = {'nuc_mask': 0.51053067684188, 'nuc_seed': 0.9918831824422522} ## SEG:  0.7501725367486776
   segmentation_space = {'nuc_mask' :ho.hp.uniform('nuc_mask', 0.3, 0.7),
                         'nuc_seed':ho.hp.uniform('nuc_seed', 0.9, 1.0), 
                         }
@@ -68,6 +120,8 @@ def segparams():
   res['n_evals'] = 40 ## must be greater than 2 or hyperopt throws errors
   res['blur'] = False
   return res
+
+## data loading and network training
 
 def load_rawdata(homedir):
   homedir = Path(homedir)
@@ -114,7 +168,7 @@ def build_trainable(rawdata):
   mask_labeled_slices = rawdata['mask_labeled_slices']
   inds_labeled_slices = rawdata['inds_labeled_slices']
 
-  border_weights = True
+  border_weights = False
 
   chansem = channel_semantics()
   cs = class_semantics()
@@ -159,14 +213,14 @@ def build_trainable(rawdata):
   ## reweight border pixels
   n_sample, n_y, n_x, _ = xs.shape
   ws = np.ones(xs.shape[:-1])
-  ws = ws / ws.sum((1,2), keepdims=True)
+  ws = ws / ws.mean((1,2), keepdims=True)
   if border_weights:
     a,b,c,d = ys.shape
     mask = ys[...,cs['mem']]==1 # ????
     distimg = ~mask
     distimg = np.array([distance_transform_edt(d) for d in distimg])
     distimg = np.exp(-distimg/10)
-    ws = distimg/distimg.sum((1,2), keepdims=True)
+    ws = distimg/distimg.mean((1,2), keepdims=True)
 
   classweights = [1/cs['n_classes'],]*cs['n_classes']
   print(xs.shape, ys.shape, mask_labeled_slices.shape)
@@ -220,53 +274,259 @@ def build_trainable(rawdata):
 
   return res
 
-## utility functions (called internally)
+def build_trainable3D(rawdata):
+  img = rawdata['img']
+  img = perm(img,"TZCYX", "TZYXC")
+  lab = rawdata['lab']
+  mask_labeled_slices = rawdata['mask_labeled_slices']
+  inds_labeled_slices = rawdata['inds_labeled_slices']
 
-def lab2instance(x):
-  d = class_semantics()
-  x[x!=d['nuc']] = 0
-  x = label(x)[0]
-  return x
+  border_weights = False
 
-def random_augmentation_xy(xpatch, ypatch, train=True):
-  if random.random()<0.5:
-      xpatch = np.flip(xpatch, axis=1)
-      ypatch = np.flip(ypatch, axis=1)
-  # if random.random()<0.5:
-  #     xpatch = np.flip(xpatch, axis=0)
-  #     ypatch = np.flip(ypatch, axis=0)
-  if random.random()<1:
-      # randangle = (random.random()-0.5)*60 # even dist between ± 30
-      randangle = 90 * random.randint(0,3)
-      xpatch  = rotate(xpatch, randangle, reshape=False, mode='reflect')
-      ypatch  = rotate(ypatch, randangle, reshape=False, mode='reflect')
-  # if train:
-  #   if random.random()<0.5:
-  #       delta = np.random.normal(loc=0, scale=5, size=(2,3,3))
-  #       xpatch = augmentation.warp_multichan(xpatch, delta=delta)
-  #       ypatch = augmentation.warp_multichan(ypatch, delta=delta)
-  #   if random.random()<0.5:
-  #       m = random.random()*xpatch.mean() # channels already normed
-  #       s = random.random()*xpatch.std()
-  #       noise = np.random.normal(m/4,s/4,xpatch.shape).astype(xpatch.dtype)
-  #       xpatch += noise
-  xpatch = xpatch.clip(min=0)
-  xpatch = xpatch/xpatch.mean((0,1))
-  return xpatch, ypatch
+  cha = channel_semantics()
+  cla = class_semantics()
 
-def convolve_zyx(pimg, axes="tzyxc"):
-  assert pimg.ndim == 5
-  pimg = perm(pimg, axes, "tzyxc")
-  weights = np.full((3, 3, 3), 1.0/27)
-  pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
-  pimg = np.array(pimg)
-  pimg = pimg.transpose((0,2,3,4,1))
-  pimg = [[convolve(pimg[t,...,c], weights=weights) for c in range(pimg.shape[-1])] for t in range(pimg.shape[0])]
-  pimg = np.array(pimg)
-  pimg = pimg.transpose((0,2,3,4,1))
-  return pimg
+  weight_stack = np.zeros_like(lab)
+  weight_stack[inds_labeled_slices[0], inds_labeled_slices[1]] = 1 ## all the pixels that have been looked at by a human set to 1.
 
-## actions
+  ## reweight border pixels
+  if False:
+    n_sample, n_y, n_x, _ = xs.shape
+    ws = np.ones(xs.shape[:-1])
+    ws = ws / ws.mean((1,2), keepdims=True)
+    if border_weights:
+      a,b,c,d = ys.shape
+      mask = ys[...,cla['mem']]==1 # ????
+      distimg = ~mask
+      distimg = np.array([distance_transform_edt(d) for d in distimg])
+      distimg = np.exp(-distimg/10)
+      ws = distimg/distimg.mean((1,2), keepdims=True)
+
+  ## we have to pad img and lab
+  ## TODO: This is specific for this image!
+  sliceshape = (1,40,128,128)
+  padding = patch.perfect_padding(img.shape, sliceshape)
+  # ipdb.set_trace()
+  img = np.pad(img, padding, 'constant')
+  lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
+  weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
+
+  slices = patch.slices_grid(lab.shape, sliceshape, allow_hetero=False)
+  slices = [s for s in slices if (lab[s]<2).sum() > 2**13] ## filter out all slices without much training data
+
+  xs = np.array([img[ss][0] for ss in slices])
+  ys = np.array([lab[ss][0] for ss in slices])
+  ws = np.array([weight_stack[ss][0] for ss in slices])
+
+  # convert ys to categorical
+  ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
+
+  # ipdb.set_trace()
+
+  # add distance channel?
+  if False:
+    if dist_channel:
+      a,b,c,d = ys.shape
+      mask = ys[...,cla['mem']]==1
+      distimg = ~mask
+      distimg = np.array([distance_transform_edt(d) for d in distimg])
+      # distimg = np.exp(-distimg/10)
+      mask = ys[...,cla['bg']]==1
+      distimg[mask] *= -1
+      # distimg = distimg/distimg.mean((1,2), keepdims=True)
+      ys = distimg[...,np.newaxis]
+      # ys = ys / ys.mean((1,2,3), keepdims=True)
+
+  # np.savez(savepath / 'traindat_small', xs=xs[::5], ys=ys[::5])
+
+  ## turn off the `ignore` class
+  # mask = ys[...,3]==1
+  # ys[mask] = 0
+
+  classweights = [1/cla['n_classes'],]*cla['n_classes']
+  print(xs.shape, ys.shape, mask_labeled_slices.shape)
+  print(ys.max((0,1,2)))
+
+  ## normalize over space. sample and channel independent
+  xs = xs/np.mean(xs,(1,2,3), keepdims=True)
+
+  ## shuffle
+  inds = np.arange(xs.shape[0])
+  np.random.shuffle(inds)
+  invers = np.argsort(np.arange(inds.shape[0])[inds])
+  xs = xs[inds]
+  ys = ys[inds]
+  ws = ws[inds]
+
+  ## train vali split
+  split = 5
+  n_vali = xs.shape[0]//split
+  xs_train = xs[:-n_vali]
+  ys_train = ys[:-n_vali]
+  ws_train = ws[:-n_vali]
+  xs_vali  = xs[-n_vali:]
+  ys_vali  = ys[-n_vali:]
+  ws_vali  = ws[-n_vali:]
+  
+  xsem = xs_semantics()
+  unet_params = {
+    'n_pool' : 2,
+    'inputchan' : xsem['n_channels'],
+    'n_classes' : cla['n_classes'],
+    'n_convolutions_first_layer' : 16,
+    'dropout_fraction' : 0.2,
+    'kern_width' : 3,
+    'ndim' : 3,
+  }
+
+  net = unet.get_unet_n_pool(**unet_params)
+
+  # loss  = unet.my_categorical_crossentropy(weights=classweights, itd=0)
+
+  res = dict()
+  res['xs_train'] = xs_train
+  res['xs_vali'] = xs_vali
+  res['ys_train'] = ys_train
+  res['ys_vali'] = ys_vali
+  res['ws_train'] = ws_train
+  res['ws_vali'] = ws_vali
+  res['classweights'] = classweights
+
+  res['net'] = net
+  # res['loss'] = loss
+
+  return res
+
+def build_trainable2D(rawdata):
+  img = rawdata['img']
+  img = perm(img,"TZCYX", "TZYXC")
+  lab = rawdata['lab']
+  mask_labeled_slices = rawdata['mask_labeled_slices']
+  inds_labeled_slices = rawdata['inds_labeled_slices']
+
+  border_weights = False
+
+  cha = channel_semantics()
+  cla = class_semantics()
+
+  weight_stack = np.zeros_like(lab)
+  weight_stack[inds_labeled_slices[0], inds_labeled_slices[1]] = 1 ## all the pixels that have been looked at by a human set to 1.
+
+  ## reweight border pixels
+  if False:
+    n_sample, n_y, n_x, _ = xs.shape
+    ws = np.ones(xs.shape[:-1])
+    ws = ws / ws.mean((1,2), keepdims=True)
+    if border_weights:
+      a,b,c,d = ys.shape
+      mask = ys[...,cla['mem']]==1 # ????
+      distimg = ~mask
+      distimg = np.array([distance_transform_edt(d) for d in distimg])
+      distimg = np.exp(-distimg/10)
+      ws = distimg/distimg.mean((1,2), keepdims=True)
+
+  ## we have to pad img and lab
+  ## TODO: This is specific for this image!
+  sliceshape = (1,5,200,200)
+  minimum_padding = np.array([0,4,0,0,0])
+  shape = np.array(img.shape) + minimum_padding
+  padding = patch.perfect_padding(shape, sliceshape)
+  # ipdb.set_trace()
+  img = np.pad(img, padding, 'constant')
+  lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
+  weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
+
+  slices = patch.slices_grid(lab.shape, sliceshape, allow_hetero=False)
+  slices = [s for s in slices if (lab[s]<2).sum() > 0] ## filter out all slices without much training data
+
+  xs = np.array([img[ss][0] for ss in slices])
+  ys = np.array([lab[ss][0] for ss in slices])
+  ws = np.array([weight_stack[ss][0] for ss in slices])
+  # convert ys to categorical
+  ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
+  ## szyxc
+  xs = collapse(xs, [[0],[2],[3],[1,4]])
+  ys = ys[:,2] #collapse(ys, [[0],[2],[3],[1,4]])
+  ## szyx
+  ws = ws[:,2] #collapse(ws, [[0],[2],[3],[1]])
+
+
+  # ipdb.set_trace()
+
+  # add distance channel?
+  if False:
+    if dist_channel:
+      a,b,c,d = ys.shape
+      mask = ys[...,cla['mem']]==1
+      distimg = ~mask
+      distimg = np.array([distance_transform_edt(d) for d in distimg])
+      # distimg = np.exp(-distimg/10)
+      mask = ys[...,cla['bg']]==1
+      distimg[mask] *= -1
+      # distimg = distimg/distimg.mean((1,2), keepdims=True)
+      ys = distimg[...,np.newaxis]
+      # ys = ys / ys.mean((1,2,3), keepdims=True)
+
+  # np.savez(savepath / 'traindat_small', xs=xs[::5], ys=ys[::5])
+
+  ## turn off the `ignore` class
+  # mask = ys[...,3]==1
+  # ys[mask] = 0
+
+  classweights = [1/cla['n_classes'],]*cla['n_classes']
+  print(xs.shape, ys.shape, mask_labeled_slices.shape)
+  print(ys.max((0,1,2)))
+
+  ## normalize over space. sample and channel independent
+  xs = xs/np.mean(xs,(1,2,3), keepdims=True)
+
+  ## shuffle
+  inds = np.arange(xs.shape[0])
+  np.random.shuffle(inds)
+  invers = np.argsort(np.arange(inds.shape[0])[inds])
+  xs = xs[inds]
+  ys = ys[inds]
+  ws = ws[inds]
+
+  ## train vali split
+  split = 5
+  n_vali = xs.shape[0]//split
+  xs_train = xs[:-n_vali]
+  ys_train = ys[:-n_vali]
+  ws_train = ws[:-n_vali]
+  xs_vali  = xs[-n_vali:]
+  ys_vali  = ys[-n_vali:]
+  ws_vali  = ws[-n_vali:]
+  
+  xsem = xs_semantics()
+  unet_params = {
+    'n_pool' : 2,
+    'inputchan' : xsem['n_channels'],
+    'n_classes' : cla['n_classes'],
+    'n_convolutions_first_layer' : 16,
+    'dropout_fraction' : 0.2,
+    'kern_width' : 3,
+    'ndim' : 3,
+  }
+
+  net = unet.get_unet_n_pool(**unet_params)
+
+  # loss  = unet.my_categorical_crossentropy(weights=classweights, itd=0)
+
+  res = dict()
+  res['xs_train'] = xs_train
+  res['xs_vali'] = xs_vali
+  res['ys_train'] = ys_train
+  res['ys_vali'] = ys_vali
+  res['ws_train'] = ws_train
+  res['ws_vali'] = ws_vali
+  res['classweights'] = classweights
+
+  res['net'] = net
+  # res['loss'] = loss
+
+  return res
+
 
 def train(trainable, savepath):
   xs_train = trainable['xs_train']
@@ -284,8 +544,15 @@ def train(trainable, savepath):
   stepsperepoch   = xs_train.shape[0] // batchsize
   validationsteps = xs_vali.shape[0] // batchsize
 
+  print("batchsize n_epochs stepsperepoch validationsteps n_samples_train, n_samples_vali")
+  print(batchsize, n_epochs, stepsperepoch, validationsteps, xs_train.shape[0], xs_vali.shape[0])
+
   optim = Adam(lr=1e-4)
-  loss  = unet.my_categorical_crossentropy(weights=classweights, itd=0)
+  # loss  = unet.my_categorical_crossentropy(classweights=classweights, itd=0)
+  loss  = unet.weighted_categorical_crossentropy(classweights=classweights, itd=0)
+  ys_train = np.concatenate([ys_train, ws_train[...,np.newaxis]], -1)
+  ys_vali = np.concatenate([ys_vali, ws_vali[...,np.newaxis]], -1)
+  
   net.compile(optimizer=optim, loss=loss, metrics=['accuracy'])
   checkpointer = ModelCheckpoint(filepath=str(savepath / "w001.h5"), verbose=0, save_best_only=True, save_weights_only=True)
   earlystopper = EarlyStopping(patience=30, verbose=0)
@@ -319,7 +586,7 @@ def train(trainable, savepath):
   net.save_weights(savepath / 'w002.h5')
   return history
 
-## require trained network
+## predictions from trained network
 
 def predict_on_new(net,img):
   assert img.ndim == 5 ## TZYXC
@@ -345,35 +612,83 @@ def predict_on_new(net,img):
   stack = np.array(stack)
   return stack
 
+def predict_on_new_3D(net,img):
+  assert img.ndim == 5 ## TZYXC
+  # slices = patch.
+  stack = []
+  ntimes = img.shape[0]
+  for t in range(ntimes):
+    timepoint = []
+    # for ax in ["ZYXC", "YXZC", "XZYC"]:
+    for ax in ["ZYXC"]: #, "YXZC", "XZYC"]:
+      x = perm(img[t], "ZCYX", ax)
+      # x = unet.add_z_to_chan(x, dz, axes="ZYXC") # lying about direction of Z!
+      slices = patch.slices_grid(x.shape[:-1], (64,128,128), coverall=False)
+      b = 20
+      slices_all = patch.make_triplets(slices, (b,b,b))
+      # ipdb.set_trace()
+      pimg = np.zeros(x.shape[:-1] + (3,))
+      x = np.pad(x, [(b,b)]*3 + [(0,0)], 'constant')
+      count = 0
+      for si,so,sc in slices_all:
+        count += 1
+        p = x[si]
+        p = p / p.mean((0,1,2), keepdims=True)
+        pimg[sc] = net.predict(p[np.newaxis], batch_size=1)[0][so]
+      pimg = pimg.astype(np.float16)
+      pimg = perm(pimg, ax, "ZYXC")
+      # qsave(collapse(splt(pimg[:64,::4,::4,rgbdiv],8,0),[[0,2],[1,3],[4]]))
+      timepoint.append(pimg)
+    timepoint = np.array(timepoint)
+    timepoint = timepoint.mean(0)
+    stack.append(timepoint)
+  stack = np.array(stack)
+  return stack
+
 def predict_train_vali(trainable, savepath=None):
   net = trainable['net']
   xs_train = trainable['xs_train']
   xs_vali = trainable['xs_vali']
   rgbmem = class_semantics()['rgb.mem']
   pred_xs_train = net.predict(xs_train)
-  rows, cols = rowscols(pred_xs_train.shape[0], 8)
-  res1 = collapse(splt(pred_xs_train[:cols*rows,...,rgbmem],rows,0), [[0,2],[1,3],[4]])
-  if savepath:
-    io.imsave(savepath / 'pred_xs_train.png', res1)
   pred_xs_vali = net.predict(xs_vali)
+  
+  if xs_train.ndim == 5:
+    pred_xs_train = pred_xs_train.max(1) # max proj across z
+    pred_xs_vali  = pred_xs_vali.max(1) # max proj across z
+
+  rows, cols = rowscols(pred_xs_train.shape[0], 8)
+  collshape = [[0,2],[1,3],[4]]
+  res1 = collapse(splt(pred_xs_train[:cols*rows,...,rgbmem],rows,0), collshape)
   rows, cols = rowscols(pred_xs_vali.shape[0], 5)
-  res2 = collapse(splt(pred_xs_vali[:cols*rows,...,rgbmem],rows,0), [[0,2],[1,3],[4]])
-  if savepath:
-    io.imsave(savepath / 'pred_xs_vali.png', res2)
+  res2 = collapse(splt(pred_xs_vali[:cols*rows,...,rgbmem],rows,0), collshape)
+  
+  if savepath: io.imsave(savepath / 'pred_xs_train.png', res1)
+  if savepath: io.imsave(savepath / 'pred_xs_vali.png', res2)
   return res1, res2
 
 ## plotting
 
 def show_trainvali(trainable, savepath=None):
   xs_train = trainable['xs_train']
-  xs_vali = trainable['xs_vali']
+  xs_vali  = trainable['xs_vali']
   ys_train = trainable['ys_train']
-  ys_vali = trainable['ys_vali']
+  ys_vali  = trainable['ys_vali']
+  ws_train = trainable['ws_train']
+  ws_vali  = trainable['ws_vali']
 
-  d = channel_semantics()
+  if xs_train.ndim==5:
+    xs_train = np.max(ws_train[...,np.newaxis]*xs_train, axis=1) # max over z dim
+    xs_vali  = np.max(ws_vali[...,np.newaxis]*xs_vali, axis=1)   # max over z dim
+    ys_train = np.max(ws_train[...,np.newaxis]*ys_train, axis=1) # max over z dim
+    ys_vali  = np.max(ws_vali[...,np.newaxis]*ys_vali, axis=1)   # max over z dim
+
+
   c = class_semantics()
+  d = channel_semantics()
+  e = xs_semantics()
 
-  sx = [slice(None,5), Ellipsis, d['rgbxs']]
+  sx = [slice(None,5), Ellipsis, e['rgb']]
   sy = [slice(None,5), Ellipsis, c['rgb.mem']]
   xt = xs_train[sx]
   xv = xs_vali[sx]
@@ -411,16 +726,16 @@ def plot_history(history, savepath=None):
 
 def max_z_divchan(pimg, savepath=None):
   "max proj across z, then merg across time"
-  ch_div = ts.class_semantics()['div']
+  ch_div = class_semantics()['div']
   res = merg(pimg[:,...,ch_div].max(1),0)
-  io.imsave(savedir / 'max_z_divchan.png', res)
+  io.imsave(savepath / 'max_z_divchan.png', res)
   return res
 
 def show_results(pimg, rawdata, savepath=None):
   img = rawdata['img']
   lab = rawdata['lab']
   inds = rawdata['inds_labeled_slices']
-  rgbimg = channel_semantics()['rgb.img']
+  rgbimg = channel_semantics()['rgb']
   rgbmem = class_semantics()['rgb.mem']
 
   x = img[inds[0], inds[1]].transpose((0,2,3,1))[...,rgbimg]
@@ -616,13 +931,12 @@ def compute_seg_on_slices(hyp, rawdata):
   return seg_scores
 
 def analyze_hyp(hyp, rawdata, segparams, savepath):
-  # pimg = np.load(loadpath / 'pimg.npy')
   segmentation_params = segparams['params']
   stack_segmentation_function = segparams['function']
   inds = rawdata['inds_labeled_slices']
   lab = rawdata['lab']
   img = rawdata['img']
-  ch_nuc_img = channel_semantics()['ch_nuc_img']
+  ch_nuc_img = channel_semantics()['nuc']
 
   np.save(savepath / 'hyp', hyp)
 
@@ -658,7 +972,7 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
 def build_nhl(hyp, rawdata, savepath):
   print("GENERATE NHLS FROM HYP AND ANALYZE")
   img = rawdata['img']
-  ch_nuc_img = channel_semantics()['ch_nuc_img']
+  ch_nuc_img = channel_semantics()['nuc']
   nhls = nhl_tools.labs2nhls(hyp, img[:,:,ch_nuc_img])
   pickle.dump(nhls, open(savepath / 'nhls.pkl', 'wb'))
 
@@ -730,4 +1044,69 @@ should split_train_vali be an inner function of load_source_target?
   - can optimize a segmentation on a pimg w hyperopt
   - all functions have been ported, all the way through tracking.
   simple ipython scheme for calling train_seg_lib is trainseg_ipy.
+
+TODO:
+- use weights in loss
+- build true 3D unet
+  - new xs,ys,ws,net and predict
+    - but keep rawdata, keep trainable as name for collection
+- apply as patches to larger retina image
+- tracking ground truth and hyperopt
+
+1. We can hack the mask into the loss function without having to produce a *new* loss function
+for every x,y pair if we just add the weights as an extra channel on ys_train, and ys_vali.
+This now means that ys_train and ys_vali will have a different shape from the output of the network!
+But only during training!
+BUG: now the old computation of accuracy no longer works, because it required that ys_pred be a categorical one hot encoding.
+now that this is done, do we need to test it's effectiveness?
+(ignore for now)
+TODO: set the weights to zero wherever we have an explicit "ignore" class from the annotations.
+
+2. Let's make it 3D
+
+This issue is complex enough that it deserves it's own notes...
+see [unet_3d.md]
+
+So the 3D unet is training, and the loss looks reasonable, but i don't yet know if it's good.
+The network i'm currently trying is quite small. 353k params.
+
+There are multiple layers of processing we may want to apply during training.
+- whole dataset level
+  - spacetime registration
+  - calculating indices of annotated slices
+  - compute gt_slices
+- individual timepoint
+  - cropping borders
+  - calculating 3D distances or weights.
+- individual z slices
+  - 2d distance to boundaries
+- xs, ys: training set level
+  - pixelwise norm across samples?
+- batch level
+  - batch norm
+- patch level
+  - patch normalization
+
+we can do dataset, timepoint, zslices, xs,ys, and patch all from within build_trainable.
+We don't have access to patches *after* augmentation, nor to batches (which are generated dynamically).
+
+Is there a way we can combine the 2D and 3D models?
+There is much they have in common.
+If we provide a simple slices-based interface for training we could combine them?
+we can replace the tricky `add_z_to_channels` method with a slices-based approach.
+first we compute the proper set of slices for the full stack. then we collapse z and channels.
+we can probably replace that entire function.
+
+also, it often seems like we want to do some padding of our image in combination with pulling slices from it.
+should we combine padding and slices together into a single function?
+
+I could use a padding setting that takes a patch size and the image size and returns the padding
+vector that will make the imgsize a perfect multiple in every dimension.
+
+OK. Now the training loss won't go below 2.5 which is terrible and the accuracy is 95, which is also terrible
+because we haven't fixed the one-hot-encoding problem.
+But the slices and padding all seem to be working nicely, which is a huge plus.
+
+
+
 """
