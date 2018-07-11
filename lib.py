@@ -1,9 +1,7 @@
 import numpy as np
 import re
 import pandas
-from segtools import lib as seglib
-from segtools import voronoi
-from segtools.ipython_defaults import perm, flatten, merg, splt, collapse
+from segtools.numpy_utils import perm, flatten, merg, splt, collapse
 from scipy.ndimage import label
 
 from sortedcontainers import SortedSet, SortedDict
@@ -22,7 +20,7 @@ def autocorr_multi(img):
   x  = img[0,0,0,:,i]
 
 def mkpoints():
-  pointanno = pandas.read_csv("~/Desktop/Projects/fisheye/anno/point_anno.csv", header=0, sep=' ')
+  pointanno = pandas.read_csv("anno/point_anno.csv")
   points = pointanno[['X', 'Y', 'Slice']]
   points.X *= 10
   points.X = np.ceil(points.X)
@@ -69,7 +67,6 @@ def labeled_slices_to_xsys(img, mask, dz=0, axes="TZCYX"):
     xs.append(add_z_to_chan(imgpad[t],z+dz,dz))
   xs = np.array(xs) # results in "XYXC"
   return xs
-
 
 @DeprecationWarning
 def merge_into_cols(*args, n=10):
