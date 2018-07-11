@@ -2,6 +2,13 @@ from segtools.defaults.ipython_remote import *
 # from ipython_remote_defaults import *
 from segtools.defaults.training import *
 from segtools.numpy_utils import collapse2
+from segtools import math_utils
+from scipy.signal import fftconvolve
+import lib
+
+from keras.models import Model
+from keras.layers import Input
+from keras import losses
 
 import gputools
 from contextlib import redirect_stdout
@@ -145,12 +152,21 @@ def load_rawdata(homedir):
   inds_labeled_slices = np.indices(mask_labeled_slices.shape)[:,mask_labeled_slices]
   gt_slices = np.array([lab2instance(x) for x in lab[inds_labeled_slices[0], inds_labeled_slices[1]]])
 
+  # add distance channel?
+  points = lib.mkpoints()
+  cen = np.zeros((71,400,400))
+  cen[list(points.T)] = 1
+  def f(x): return np.exp(-(x*x).sum()/30)
+  kern = math_utils.build_kernel_nd(60,3,f)
+  cen2 = fftconvolve(cen, kern, mode='same')
+
   res = dict()
   res['img'] = img
   res['lab'] = lab
   res['mask_labeled_slices'] = mask_labeled_slices
   res['inds_labeled_slices'] = inds_labeled_slices
   res['gt_slices'] = gt_slices
+  res['cellcenters'] = cen2
   return res
 
 def compute_weights(rawdata):
@@ -174,7 +190,7 @@ def compute_weights(rawdata):
     mask = lab_tz==class_semantics()['mem']
     distimg = ~mask
     distimg = distance_transform_edt(distimg)
-    distimg = np.exp(-distimg/50)
+    distimg = np.exp(-distimg/10)
     print(distimg.mean())
     weight_stack[t,z] = distimg/distimg.mean()
 
@@ -186,144 +202,16 @@ def compute_weights(rawdata):
 
 ## models!!!
 
-@DeprecationWarning
-def build_trainable(rawdata):
-  img = rawdata['img']
-  lab = rawdata['lab']
-  mask_labeled_slices = rawdata['mask_labeled_slices']
-  inds_labeled_slices = rawdata['inds_labeled_slices']
-
-  border_weights = False
-
-  chansem = channel_semantics()
-  clasem = class_semantics()
-
-  def f_xsem():
-    d = dict()
-    dz = 2
-    d['dz'] = dz
-    d['n_channels'] = chansem['n_channels']*(1+2*dz)
-    d['mem'] = 2*dz # original, centered membrane channelk
-    d['nuc'] = 2*dz + 1
-    d['rgb']  = [d['mem'], d['nuc'], d['nuc']]
-    return d
-  xsem = f_xsem()
-  
-  ys = lab[mask_labeled_slices].copy()
-  xs = []
-  for t,z in inds_labeled_slices.T:
-    res = unet.add_z_to_chan(img[t], xsem['dz'], ind=z)
-    xs.append(res[0])
-  xs = np.array(xs)
-  xs = perm(xs, "scyx", "syxc")
-
-  # convert ys to categorical
-  ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
-
-  # add distance channel?
-  if False:
-    if dist_channel:
-      a,b,c,d = ys.shape
-      mask = ys[...,clasem['mem']]==1
-      distimg = ~mask
-      distimg = np.array([distance_transform_edt(d) for d in distimg])
-      # distimg = np.exp(-distimg/10)
-      mask = ys[...,clasem['bg']]==1
-      distimg[mask] *= -1
-      # distimg = distimg/distimg.mean((1,2), keepdims=True)
-      ys = distimg[...,np.newaxis]
-      # ys = ys / ys.mean((1,2,3), keepdims=True)
-
-  # split 400x400 into 16x100x100 patches (if r=4) and reshape back into "SYXC"
-  # axes are "SYXC"
-  r = 2
-  xs = collapse(splt(xs,[r,r],[1,2]), [[0,1,3],[2],[4],[5]])
-  ys = collapse(splt(ys,[r,r],[1,2]), [[0,1,3],[2],[4],[5]])
-
-  # np.savez(savepath / 'traindat_small', xs=xs[::5], ys=ys[::5])
-
-  ## turn off the `ignore` class
-  # mask = ys[...,3]==1
-  # ys[mask] = 0
-
-  ## reweight border pixels
-  n_sample, n_y, n_x, _ = xs.shape
-  ws = np.ones(xs.shape[:-1])
-  ws = ws / ws.mean((1,2), keepdims=True)
-  if border_weights:
-    a,b,c,d = ys.shape
-    mask = ys[...,clasem['mem']]==1 # ????
-    distimg = ~mask
-    distimg = np.array([distance_transform_edt(d) for d in distimg])
-    distimg = np.exp(-distimg/10)
-    ws = distimg/distimg.mean((1,2), keepdims=True)
-
-  classweights = [1/clasem['n_classes'],]*clasem['n_classes']
-  print(xs.shape, ys.shape, mask_labeled_slices.shape)
-  print(ys.max((0,1,2)))
-
-  ## normalize
-  xs = xs/xs.mean((1,2), keepdims=True)
-
-  ## shuffle
-  inds = np.arange(xs.shape[0])
-  np.random.shuffle(inds)
-  invers = np.argsort(np.arange(inds.shape[0])[inds])
-  xs = xs[inds]
-  ys = ys[inds]
-  ws = ws[inds]
-
-  ## train vali split
-  split = 5
-  n_vali = xs.shape[0]//split
-  xs_train = xs[:-n_vali]
-  ys_train = ys[:-n_vali]
-  ws_train = ws[:-n_vali]
-  xs_vali  = xs[-n_vali:]
-  ys_vali  = ys[-n_vali:]
-  ws_vali  = ws[-n_vali:]
-  
-  unet_params = {
-    'n_pool' : 2,
-    'inputchan' : xsem['n_channels'],
-    'n_classes' : clasem['n_classes'],
-    'n_convolutions_first_layer' : 16,
-    'dropout_fraction' : 0.2,
-    'kern_width' : 3,
-    'ndim' : 2,
-  }
-  net = unet.get_unet_n_pool(**unet_params)
-
-  # loss  = unet.my_categorical_crossentropy(weights=classweights, itd=0)
-
-  res = dict()
-  res['xs_train'] = xs_train
-  res['xs_vali'] = xs_vali
-  res['ys_train'] = ys_train
-  res['ys_vali'] = ys_vali
-  res['ws_train'] = ws_train
-  res['ws_vali'] = ws_vali
-  res['classweights'] = classweights
-  res['xsem'] = xsem
-  res['net'] = net
-  # res['loss'] = loss
-
-  return res
-
 def build_trainable3D(rawdata):
   img = rawdata['img']
   lab = rawdata['lab']
-  mask_labeled_slices = rawdata['mask_labeled_slices']
-  inds_labeled_slices = rawdata['inds_labeled_slices']
-
-  border_weights = False
 
   cha = channel_semantics()
   cla = class_semantics()
 
   def f_xsem():
     d = dict()
-    d['n_channels'] = 2
+    d['n_channels'] = cha['n_channels']
     d['mem'] = 0
     d['nuc'] = 1
     d['rgb']  = [d['mem'], d['nuc'], d['nuc']]
@@ -347,35 +235,33 @@ def build_trainable3D(rawdata):
   ws = np.array([weight_stack[ss][0] for ss in slices])
   ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
 
+  if False:
+    ## add extra cell center channel
+    cellcenters = rawdata['cellcenters']
+    slices1 = patch.slices_heterostride(cellcenters.shape,(32,128,128),(30,2,2))
+    xs_ccs = np.array([img[0][ss] for ss in slices1])
+    ccs = np.array([cellcenters[ss] for ss in slices1])
+
   ## normalize over space. sample and channel independent
   xs = xs/np.mean(xs,(1,2,3), keepdims=True)
-
-  # add distance channel?
-  if False:
-    if dist_channel:
-      a,b,c,d = ys.shape
-      mask = ys[...,cla['mem']]==1
-      distimg = ~mask
-      distimg = np.array([distance_transform_edt(d) for d in distimg])
-      # distimg = np.exp(-distimg/10)
-      mask = ys[...,cla['bg']]==1
-      distimg[mask] *= -1
-      # distimg = distimg/distimg.mean((1,2), keepdims=True)
-      ys = distimg[...,np.newaxis]
-      # ys = ys / ys.mean((1,2,3), keepdims=True)
   
-  print(xs.shape, ys.shape, mask_labeled_slices.shape)
+  print(xs.shape, ys.shape, ws.shape)
 
   unet_params = {
     'n_pool' : 2,
-    'inputchan' : xsem['n_channels'],
-    'n_classes' : cla['n_classes'],
+    # 'inputchan' : xsem['n_channels'],
+    # 'n_classes' : 3, #cla['n_classes'],
     'n_convolutions_first_layer' : 16,
     'dropout_fraction' : 0.2,
     'kern_width' : 5,
-    'ndim' : 3,
+    # 'ndim' : 3,
   }
-  net = unet.get_unet_n_pool(**unet_params)
+  input0 = Input((None, None, None, xsem['n_channels']))
+  unet_out = unet.get_unet_n_pool(input0, **unet_params)
+  output1 = unet.acti(unet_out, 3) #cla['n_classes'])
+  # output2 = unet.acti(unet_out, 1, last_activation='linear')
+  # output2.add_loss()
+  net = Model(inputs=input0, outputs=output2)
 
   res = shuffle_split({'xs':xs,'ys':ys,'ws':ws})
   res['net'] = net
@@ -383,21 +269,18 @@ def build_trainable3D(rawdata):
   res['slices'] = slices
   res['slices0'] = slices0
   return res
+
 
 def build_trainable2D(rawdata):
   img = rawdata['img']
   lab = rawdata['lab']
-  mask_labeled_slices = rawdata['mask_labeled_slices']
-  inds_labeled_slices = rawdata['inds_labeled_slices']
-
-  border_weights = False
 
   cha = channel_semantics()
   cla = class_semantics()
 
   def f_xsem():
     d = dict()
-    dz = 2
+    dz = 5
     d['dz'] = dz
     d['nzdim'] = 2*dz+1
     d['n_channels'] = cha['n_channels']*d['nzdim']
@@ -411,13 +294,11 @@ def build_trainable2D(rawdata):
   weight_stack = compute_weights(rawdata)
 
   ## padding
-  if True:
-    imgshape0 = img.shape
-    padding = [(0,0)]*5
-    padding[1] = (xsem['dz'],xsem['dz'])
-    img = np.pad(img, padding, 'constant')
-    lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
-    weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
+  padding = [(0,0)]*5
+  padding[1] = (xsem['dz'],xsem['dz'])
+  img = np.pad(img, padding, 'constant')
+  lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
+  weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
 
   ## extract slices and build xs,ys,ws
   nzdim = xsem['nzdim']
@@ -431,25 +312,12 @@ def build_trainable2D(rawdata):
   ## normalize over space. sample and channel independent
   xs = xs/np.mean(xs,(1,2,3), keepdims=True)
 
+  ## move z to channels
   xs = collapse(xs, [[0],[2],[3],[1,4]]) ## szyxc
   ys = ys[:,xsem['dz']] ## szyxc
   ws = ws[:,xsem['dz']] ## szyx
-
-  # add distance channel?
-  if False:
-    if dist_channel:
-      a,b,c,d = ys.shape
-      mask = ys[...,cla['mem']]==1
-      distimg = ~mask
-      distimg = np.array([distance_transform_edt(d) for d in distimg])
-      # distimg = np.exp(-distimg/10)
-      mask = ys[...,cla['bg']]==1
-      distimg[mask] *= -1
-      # distimg = distimg/distimg.mean((1,2), keepdims=True)
-      ys = distimg[...,np.newaxis]
-      # ys = ys / ys.mean((1,2,3), keepdims=True)
   
-  print(xs.shape, ys.shape, mask_labeled_slices.shape)
+  print(xs.shape, ys.shape, ws.shape)
   print(ys.max((0,1,2)))
 
   unet_params = {
@@ -470,29 +338,18 @@ def build_trainable2D(rawdata):
   res['slices0'] = slices0
   return res
 
-  ## totally boilerplate
-
-  ## compute weights
-
-def build_trainable2D_2(rawdata):
+def build_trainable_dist2cen(rawdata):
   img = rawdata['img']
   lab = rawdata['lab']
-  mask_labeled_slices = rawdata['mask_labeled_slices']
-  inds_labeled_slices = rawdata['inds_labeled_slices']
-
-  border_weights = False
 
   cha = channel_semantics()
   cla = class_semantics()
 
   def f_xsem():
     d = dict()
-    dz = 2
-    d['dz'] = dz
-    d['nzdim'] = 2*dz+1
-    d['n_channels'] = cha['n_channels']*d['nzdim']
-    d['mem'] = 2*dz # original, centered membrane channelk
-    d['nuc'] = 2*dz + 1
+    d['n_channels'] = 1
+    d['mem'] = 0
+    d['nuc'] = 1
     d['rgb']  = [d['mem'], d['nuc'], d['nuc']]
     return d
   xsem = f_xsem()
@@ -500,63 +357,65 @@ def build_trainable2D_2(rawdata):
   weight_stack = compute_weights(rawdata)
 
   ## padding
-  if True:
-    imgshape0 = img.shape
-    padding = [(0,0)]*5
-    padding[1] = (xsem['dz'],xsem['dz'])
-    img = np.pad(img, padding, 'constant')
-    lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
-    weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
+  # padding = [(0,0)]*5
+  # padding[1] = (10,10)
+  # img = np.pad(img, padding, 'constant')
+  # lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
+  # weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
 
   ## extract slices and build xs,ys,ws
-  nzdim = xsem['nzdim']
-  slices0 = patch.slices_heterostride(lab.shape,(1,nzdim,200,200),(11,75-nzdim+1,2,2))
-  slices = [s for s in slices0 if (lab[s][0,xsem['dz']]<2).sum() > 0] ## filter out all slices without much training data
-  xs = np.array([img[ss][0] for ss in slices])
-  ys = np.array([lab[ss][0] for ss in slices])
-  ws = np.array([weight_stack[ss][0] for ss in slices])
-  ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
+  if False:
+    slices0 = patch.slices_heterostride(lab.shape,(1,32,128,128),(11,30,2,2))
+    slices = [s for s in slices0 if (lab[s][0,10:20]<2).sum() > 0] ## filter out all slices without much training data
+    xs = np.array([img[ss][0] for ss in slices])
+    ys = np.array([lab[ss][0] for ss in slices])
+    ws = np.array([weight_stack[ss][0] for ss in slices])
+    ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
+
+  ## add extra cell center channel
+  cellcenters = rawdata['cellcenters']
+  slices1 = patch.slices_heterostride(cellcenters.shape,(32,128,128),(30,2,2))
+  xs = np.array([img[0][ss] for ss in slices1])
+  ys = np.array([cellcenters[ss] for ss in slices1])
+  ys = ys[...,np.newaxis]
+  ws = np.array([weight_stack[ss] for ss in slices1])
 
   ## normalize over space. sample and channel independent
   xs = xs/np.mean(xs,(1,2,3), keepdims=True)
-
-  xs = collapse(xs, [[0],[2],[3],[1,4]]) ## szyxc
-  ys = ys[:,xsem['dz']] ## szyxc
-  ws = ws[:,xsem['dz']] ## szyx
-
-  # add distance channel?
-  if True:
-    if dist_channel:
-      a,b,c,d = ys.shape
-      mask = ys[...,cla['mem']]==1
-      distimg = ~mask
-      distimg = np.array([distance_transform_edt(d) for d in distimg])
-      # distimg = np.exp(-distimg/10)
-      mask = ys[...,cla['bg']]==1
-      distimg[mask] *= -1
-      # distimg = distimg/distimg.mean((1,2), keepdims=True)
-      ys = distimg[...,np.newaxis]
-      # ys = ys / ys.mean((1,2,3), keepdims=True)
   
-  print(xs.shape, ys.shape, mask_labeled_slices.shape)
-  print(ys.max((0,1,2)))
+  print(xs.shape, ys.shape, ws.shape)
 
   unet_params = {
     'n_pool' : 2,
-    'inputchan' : xsem['n_channels'],
-    'n_classes' : cla['n_classes'],
+    # 'inputchan' : xsem['n_channels'],
+    # 'n_classes' : 3, #cla['n_classes'],
     'n_convolutions_first_layer' : 16,
     'dropout_fraction' : 0.2,
-    'kern_width' : 3,
-    'ndim' : 2,
+    'kern_width' : 5,
+    # 'ndim' : 3,
   }
-  net = unet.get_unet_n_pool(**unet_params)
+  # ipdb.set_trace()
+  input0 = Input((None, None, None, xsem['n_channels']))
+  unet_out = unet.get_unet_n_pool(input0, **unet_params)
+  output2 = unet.acti(unet_out, 1, last_activation='linear')
+
+  net = Model(inputs=input0, outputs=output2)
+  # net.layers[-1].add_loss(losses.mean_squared_error)
+
+  optim = Adam(lr=1e-4)
+  # loss  = unet.my_categorical_crossentropy(classweights=classweights, itd=0)
+  # loss = unet.weighted_categorical_crossentropy(classweights=classweights, itd=0)
+  # ys_train = np.concatenate([ys_train, ws_train[...,np.newaxis]], -1)
+  # ys_vali  = np.concatenate([ys_vali, ws_vali[...,np.newaxis]], -1)
+  
+  net.compile(optimizer=optim, loss=[losses.mean_squared_error], metrics=['accuracy'])
+
 
   res = shuffle_split({'xs':xs,'ys':ys,'ws':ws})
   res['net'] = net
   res['xsem'] = xsem
-  res['slices'] = slices
-  res['slices0'] = slices0
+  res['slices'] = slices1
+  # res['slices0'] = slices0
   return res
 
 
@@ -624,13 +483,6 @@ def train(trainable, savepath):
     print(stats)
   print_stats()
 
-  optim = Adam(lr=1e-4)
-  # loss  = unet.my_categorical_crossentropy(classweights=classweights, itd=0)
-  loss  = unet.weighted_categorical_crossentropy(classweights=classweights, itd=0)
-  ys_train = np.concatenate([ys_train, ws_train[...,np.newaxis]], -1)
-  ys_vali = np.concatenate([ys_vali, ws_vali[...,np.newaxis]], -1)
-  
-  net.compile(optimizer=optim, loss=loss, metrics=['accuracy'])
   checkpointer = ModelCheckpoint(filepath=str(savepath / "w001.h5"), verbose=0, save_best_only=True, save_weights_only=True)
   earlystopper = EarlyStopping(patience=30, verbose=0)
   reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
@@ -706,7 +558,7 @@ def predict_on_new_2D(net,img,xsem):
   idx_start_container = patch.starts(sh_grid, sh_container, sh_container).reshape((4,-1)).T
   idx_end_container   = idx_start_container + sh_container[X,:]
   idx_start_input, idx_end_input = idx_start_container, idx_end_container + extra_width[X,:]
-  ss_container = patch.starts_ends_to_sclices(idx_start_container,idx_end_container)
+  ss_container = patch.starts_ends_to_slices(idx_start_container,idx_end_container)
   ss_input = patch.starts_ends_to_slices(idx_start_input, idx_end_input)
 
   ## slice applied to output of net
