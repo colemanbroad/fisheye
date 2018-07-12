@@ -1,5 +1,6 @@
 from segtools.defaults.ipython_remote import *
 import train_seg_lib as ts
+import unet_dist2center as dc
 from segtools import unet
 
 homedir = Path('./')
@@ -9,7 +10,8 @@ savedir = Path('training/test/')
 rawdata = ts.load_rawdata(homedir)
 # trainable = ts.build_trainable2D(rawdata)
 # trainable = ts.build_trainable3D(rawdata)
-trainable = ts.build_trainable_dist2cen(rawdata)
+# trainable = ts.build_trainable_dist2cen(rawdata)
+trainable = dc.build_trainable(rawdata)
 ts.show_trainvali(trainable, savepath=savedir)
 
 ## custom stuff for running script

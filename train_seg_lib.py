@@ -68,6 +68,7 @@ def channel_semantics():
   d = dict()
   d['mem'] = 1
   d['nuc'] = 0
+  d['axes'] = "TZYXC" # assume permuted after opening
   d['n_channels'] = 2
   d['rgb'] = [d['mem'], d['nuc'], d['nuc']]
   return d
@@ -156,8 +157,8 @@ def load_rawdata(homedir):
   points = lib.mkpoints()
   cen = np.zeros((71,400,400))
   cen[list(points.T)] = 1
-  def f(x): return np.exp(-(x*x).sum()/30)
-  kern = math_utils.build_kernel_nd(60,3,f)
+  def f(x): return np.exp(-(x*x).sum()/10**2)
+  kern = math_utils.build_kernel_nd(100,3,f)
   cen2 = fftconvolve(cen, kern, mode='same')
 
   res = dict()
@@ -199,225 +200,6 @@ def compute_weights(rawdata):
     qsave(collapse2(splt(ws[:30],6,0),'12yx','1y,2x'))
 
   return weight_stack #[inds_labeled_slices[0], inds_labeled_slices[1]]
-
-## models!!!
-
-def build_trainable3D(rawdata):
-  img = rawdata['img']
-  lab = rawdata['lab']
-
-  cha = channel_semantics()
-  cla = class_semantics()
-
-  def f_xsem():
-    d = dict()
-    d['n_channels'] = cha['n_channels']
-    d['mem'] = 0
-    d['nuc'] = 1
-    d['rgb']  = [d['mem'], d['nuc'], d['nuc']]
-    return d
-  xsem = f_xsem()
-
-  weight_stack = compute_weights(rawdata)
-
-  ## padding
-  padding = [(0,0)]*5
-  padding[1] = (10,10)
-  img = np.pad(img, padding, 'constant')
-  lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
-  weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
-
-  ## extract slices and build xs,ys,ws
-  slices0 = patch.slices_heterostride(lab.shape,(1,32,128,128),(11,30,2,2))
-  slices = [s for s in slices0 if (lab[s][0,10:20]<2).sum() > 0] ## filter out all slices without much training data
-  xs = np.array([img[ss][0] for ss in slices])
-  ys = np.array([lab[ss][0] for ss in slices])
-  ws = np.array([weight_stack[ss][0] for ss in slices])
-  ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
-
-  if False:
-    ## add extra cell center channel
-    cellcenters = rawdata['cellcenters']
-    slices1 = patch.slices_heterostride(cellcenters.shape,(32,128,128),(30,2,2))
-    xs_ccs = np.array([img[0][ss] for ss in slices1])
-    ccs = np.array([cellcenters[ss] for ss in slices1])
-
-  ## normalize over space. sample and channel independent
-  xs = xs/np.mean(xs,(1,2,3), keepdims=True)
-  
-  print(xs.shape, ys.shape, ws.shape)
-
-  unet_params = {
-    'n_pool' : 2,
-    # 'inputchan' : xsem['n_channels'],
-    # 'n_classes' : 3, #cla['n_classes'],
-    'n_convolutions_first_layer' : 16,
-    'dropout_fraction' : 0.2,
-    'kern_width' : 5,
-    # 'ndim' : 3,
-  }
-  input0 = Input((None, None, None, xsem['n_channels']))
-  unet_out = unet.get_unet_n_pool(input0, **unet_params)
-  output1 = unet.acti(unet_out, 3) #cla['n_classes'])
-  # output2 = unet.acti(unet_out, 1, last_activation='linear')
-  # output2.add_loss()
-  net = Model(inputs=input0, outputs=output2)
-
-  res = shuffle_split({'xs':xs,'ys':ys,'ws':ws})
-  res['net'] = net
-  res['xsem'] = xsem
-  res['slices'] = slices
-  res['slices0'] = slices0
-  return res
-
-
-def build_trainable2D(rawdata):
-  img = rawdata['img']
-  lab = rawdata['lab']
-
-  cha = channel_semantics()
-  cla = class_semantics()
-
-  def f_xsem():
-    d = dict()
-    dz = 5
-    d['dz'] = dz
-    d['nzdim'] = 2*dz+1
-    d['n_channels'] = cha['n_channels']*d['nzdim']
-    d['mem'] = 2*dz # original, centered membrane channelk
-    d['nuc'] = 2*dz + 1
-    d['rgb']  = [d['mem'], d['nuc'], d['nuc']]
-    return d
-  xsem = f_xsem()
-
-  ## compute weights
-  weight_stack = compute_weights(rawdata)
-
-  ## padding
-  padding = [(0,0)]*5
-  padding[1] = (xsem['dz'],xsem['dz'])
-  img = np.pad(img, padding, 'constant')
-  lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
-  weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
-
-  ## extract slices and build xs,ys,ws
-  nzdim = xsem['nzdim']
-  slices0 = patch.slices_heterostride(lab.shape,(1,nzdim,200,200),(11,75-nzdim+1,2,2))
-  slices = [s for s in slices0 if (lab[s][0,xsem['dz']]<2).sum() > 0] ## filter out all slices without much training data
-  xs = np.array([img[ss][0] for ss in slices])
-  ys = np.array([lab[ss][0] for ss in slices])
-  ws = np.array([weight_stack[ss][0] for ss in slices])
-  ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
-
-  ## normalize over space. sample and channel independent
-  xs = xs/np.mean(xs,(1,2,3), keepdims=True)
-
-  ## move z to channels
-  xs = collapse(xs, [[0],[2],[3],[1,4]]) ## szyxc
-  ys = ys[:,xsem['dz']] ## szyxc
-  ws = ws[:,xsem['dz']] ## szyx
-  
-  print(xs.shape, ys.shape, ws.shape)
-  print(ys.max((0,1,2)))
-
-  unet_params = {
-    'n_pool' : 2,
-    'inputchan' : xsem['n_channels'],
-    'n_classes' : cla['n_classes'],
-    'n_convolutions_first_layer' : 16,
-    'dropout_fraction' : 0.2,
-    'kern_width' : 3,
-    'ndim' : 2,
-  }
-  net = unet.get_unet_n_pool(**unet_params)
-
-  res = shuffle_split({'xs':xs,'ys':ys,'ws':ws})
-  res['net'] = net
-  res['xsem'] = xsem
-  res['slices'] = slices
-  res['slices0'] = slices0
-  return res
-
-def build_trainable_dist2cen(rawdata):
-  img = rawdata['img']
-  lab = rawdata['lab']
-
-  cha = channel_semantics()
-  cla = class_semantics()
-
-  def f_xsem():
-    d = dict()
-    d['n_channels'] = 1
-    d['mem'] = 0
-    d['nuc'] = 1
-    d['rgb']  = [d['mem'], d['nuc'], d['nuc']]
-    return d
-  xsem = f_xsem()
-
-  weight_stack = compute_weights(rawdata)
-
-  ## padding
-  # padding = [(0,0)]*5
-  # padding[1] = (10,10)
-  # img = np.pad(img, padding, 'constant')
-  # lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
-  # weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
-
-  ## extract slices and build xs,ys,ws
-  if False:
-    slices0 = patch.slices_heterostride(lab.shape,(1,32,128,128),(11,30,2,2))
-    slices = [s for s in slices0 if (lab[s][0,10:20]<2).sum() > 0] ## filter out all slices without much training data
-    xs = np.array([img[ss][0] for ss in slices])
-    ys = np.array([lab[ss][0] for ss in slices])
-    ws = np.array([weight_stack[ss][0] for ss in slices])
-    ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
-
-  ## add extra cell center channel
-  cellcenters = rawdata['cellcenters']
-  slices1 = patch.slices_heterostride(cellcenters.shape,(32,128,128),(30,2,2))
-  xs = np.array([img[0][ss] for ss in slices1])
-  ys = np.array([cellcenters[ss] for ss in slices1])
-  ys = ys[...,np.newaxis]
-  ws = np.array([weight_stack[ss] for ss in slices1])
-
-  ## normalize over space. sample and channel independent
-  xs = xs/np.mean(xs,(1,2,3), keepdims=True)
-  
-  print(xs.shape, ys.shape, ws.shape)
-
-  unet_params = {
-    'n_pool' : 2,
-    # 'inputchan' : xsem['n_channels'],
-    # 'n_classes' : 3, #cla['n_classes'],
-    'n_convolutions_first_layer' : 16,
-    'dropout_fraction' : 0.2,
-    'kern_width' : 5,
-    # 'ndim' : 3,
-  }
-  # ipdb.set_trace()
-  input0 = Input((None, None, None, xsem['n_channels']))
-  unet_out = unet.get_unet_n_pool(input0, **unet_params)
-  output2 = unet.acti(unet_out, 1, last_activation='linear')
-
-  net = Model(inputs=input0, outputs=output2)
-  # net.layers[-1].add_loss(losses.mean_squared_error)
-
-  optim = Adam(lr=1e-4)
-  # loss  = unet.my_categorical_crossentropy(classweights=classweights, itd=0)
-  # loss = unet.weighted_categorical_crossentropy(classweights=classweights, itd=0)
-  # ys_train = np.concatenate([ys_train, ws_train[...,np.newaxis]], -1)
-  # ys_vali  = np.concatenate([ys_vali, ws_vali[...,np.newaxis]], -1)
-  
-  net.compile(optimizer=optim, loss=[losses.mean_squared_error], metrics=['accuracy'])
-
-
-  res = shuffle_split({'xs':xs,'ys':ys,'ws':ws})
-  res['net'] = net
-  res['xsem'] = xsem
-  res['slices'] = slices1
-  # res['slices0'] = slices0
-  return res
-
 
 ## utils n stuff
 
@@ -466,7 +248,7 @@ def train(trainable, savepath):
   net = trainable['net']
 
   batchsize = 3
-  n_epochs  = 100
+  n_epochs  = 10
 
   stepsperepoch   = xs_train.shape[0] // batchsize
   validationsteps = xs_vali.shape[0] // batchsize
@@ -544,66 +326,6 @@ def predict_on_new(net,img,xsem):
   stack = np.array(stack)
   return stack
 
-def predict_on_new_2D(net,img,xsem):
-  clasem = class_semantics()
-  container = np.zeros(img.shape[:-1] + (clasem['n_classes'],))
-
-  dz = xsem['dz']
-  sh_img = np.array(img.shape)
-  sh_container = np.array([1,1,400,400])
-  extra_width  = np.array([0,2*dz,0,0])
-  sh_grid  = np.ceil(sh_img[:-1] / sh_container).astype(np.int)
-
-  X = np.newaxis
-  idx_start_container = patch.starts(sh_grid, sh_container, sh_container).reshape((4,-1)).T
-  idx_end_container   = idx_start_container + sh_container[X,:]
-  idx_start_input, idx_end_input = idx_start_container, idx_end_container + extra_width[X,:]
-  ss_container = patch.starts_ends_to_slices(idx_start_container,idx_end_container)
-  ss_input = patch.starts_ends_to_slices(idx_start_input, idx_end_input)
-
-  ## slice applied to output of net
-  ss_output = patch.se2slices(idx_start_container[0],idx_end_container[0])
-  del ss_output[1]
-
-  padding = [(0,0)]*img.ndim
-  dz = xsem['dz']
-  padding[1] = (dz,dz)
-  imgpad = np.pad(img,padding,mode='constant')
-
-  for i in range(len(ss_container)):
-    sc = ss_container[i]
-    si = ss_input[i]
-    x  = imgpad[si]
-    ## "zyxc"
-    x = x / x.mean((1,2,3))
-    x = collapse(x, [[0],[2],[3],[1,4]])
-    container[sc] = net.predict(x)[ss_output]
-
-  return container
-
-def predict_on_new_3D(net,img,xsem):
-  clasem = class_semantics()
-  container = np.zeros(img.shape[:-1] + (clasem['n_classes'],))
-  
-  # ipdb.set_trace()
-  sh_img = np.array(img.shape)
-  sh_container  = np.array((1,20,400,400))
-  extra = [0,10,0,0]
-
-  slices   = patch.slices_heterostride(sh_img[:-1], sh_container, np.ceil(sh_img[:-1]/sh_container))
-  triplets = patch.make_triplets(slices, extra)
-
-  padding = [(0,0)]*5
-  padding[1] = (10,10)
-  img = np.pad(img,padding,mode='constant')
-
-  for si,so,sc in triplets:
-    x = img[si]
-    x = x / x.mean((1,2,3))
-    container[sc] = net.predict(x)[so]
-
-  return container
-
 @DeprecationWarning
 def predict_on_new_3D_old(net,img):
   assert img.ndim == 5 ## TZYXC
@@ -638,71 +360,8 @@ def predict_on_new_3D_old(net,img):
   stack = np.array(stack)
   return stack
 
-def predict_train_vali(trainable, savepath=None):
-  net = trainable['net']
-  xs_train = trainable['xs_train']
-  xs_vali = trainable['xs_vali']
-  rgbmem = class_semantics()['rgb.mem']
-  pred_xs_train = net.predict(xs_train, batch_size=1)
-  pred_xs_vali = net.predict(xs_vali, batch_size=1)
-  
-  if xs_train.ndim == 5:
-    pred_xs_train = pred_xs_train[:,14] #.max(1) # max proj across z
-    pred_xs_vali  = pred_xs_vali[:,14] #.max(1) # max proj across z
-
-  rows, cols = rowscols(pred_xs_train.shape[0], 8)
-  collshape = [[0,2],[1,3],[4]]
-  res1 = collapse(splt(pred_xs_train[:cols*rows,...,rgbmem],rows,0), collshape)
-  rows, cols = rowscols(pred_xs_vali.shape[0], 5)
-  res2 = collapse(splt(pred_xs_vali[:cols*rows,...,rgbmem],rows,0), collshape)
-  
-  if savepath: io.imsave(savepath / 'pred_xs_train.png', res1)
-  if savepath: io.imsave(savepath / 'pred_xs_vali.png', res2)
-  return res1, res2
 
 ## plotting
-
-def show_trainvali(trainable, savepath=None):
-  xs_train = trainable['xs_train']
-  xs_vali  = trainable['xs_vali']
-  ys_train = trainable['ys_train']
-  ys_vali  = trainable['ys_vali']
-  ws_train = trainable['ws_train']
-  ws_vali  = trainable['ws_vali']
-  xsem = trainable['xsem']
-
-  if xs_train.ndim==5:
-    middle_z = xs_train.shape[1]//2
-    middle_z = slice(13,17)
-    xs_train = xs_train[:,middle_z].max(1) #np.max(ws_train[...,np.newaxis]*xs_train, axis=1) # max over z dim
-    xs_vali  = xs_vali[:,middle_z].max(1)  #np.max(ws_vali[...,np.newaxis]*xs_vali, axis=1)   # max over z dim
-    ys_train = ys_train[:,middle_z].max(1) #np.max(ws_train[...,np.newaxis]*ys_train, axis=1) # max over z dim
-    ys_vali  = ys_vali[:,middle_z].max(1)  #np.max(ws_vali[...,np.newaxis]*ys_vali, axis=1)   # max over z dim
-
-  c = class_semantics()
-  d = channel_semantics()
-  e = trainable['xsem']
-
-  sx = [slice(None,xs_vali.shape[0]), Ellipsis, e['rgb']]
-  sy = [slice(None,xs_vali.shape[0]), Ellipsis, c['rgb.mem']]
-  xt = xs_train[sx]
-  xv = xs_vali[sx]
-  yt = ys_train[sy]
-  yv = ys_vali[sy]
-  xt = xt / xt.max()
-  xv = xv / xv.max()
-  yt = yt / yt.max()
-  yv = yv / yv.max()
-  xt[...,2] = 0 # turn off blue
-  xv[...,2] = 0
-  yt[...,2] = 0
-  yv[...,2] = 0
-  res = multicat([[xt,yt,2], [xv,yv,2], 2])
-  res = res[:,::2,::2]
-  res = merg(res, 0) #[[0,1],[2],[3]])
-  if savepath:
-    io.imsave(savepath / 'train_vali_ex.png', res)
-  return res
 
 def plot_history(history, savepath=None):
   if savepath:
@@ -716,8 +375,10 @@ def plot_history(history, savepath=None):
     plt.legend()
     if savepath:
       plt.savefig(savepath / (k + '.png'))
-  plot_hist_key('loss')
-  plot_hist_key('acc')
+  keys = history.history.keys()
+  for k in keys:
+    if 'val_'+k in keys:
+      plot_hist_key(k)
 
 def max_z_divchan(pimg, savepath=None):
   "max proj across z, then merg across time"
@@ -1160,5 +821,13 @@ The loss got down to 0.05 in `test3` with kernel width = 5!
 But the results in xz and yz are still inadequate for segmentation.
 - (linearly or isonet) upscale *before* training.
 - 
+
+## Thu Jul 12 12:11:46 2018
+
+We can predict *something* for the cell centerpoint channel, but it's pretty blurry.
+We want to sharpen it up.
+Let's see how small we can make the kernel while still being able to learn.
+
+
 
 """
