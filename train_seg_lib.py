@@ -1,28 +1,48 @@
-from segtools.defaults.ipython_remote import *
-# from ipython_remote_defaults import *
 from segtools.defaults.training import *
-from segtools.numpy_utils import collapse2
-from segtools import math_utils
-from scipy.signal import fftconvolve
-import lib
 
-from keras.models import Model
-from keras.layers import Input
-from keras import losses
+from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStopping, TensorBoard, ReduceLROnPlateau
 
-import gputools
 from contextlib import redirect_stdout
 import ipdb
 import pandas as pd
 
+from scipy.ndimage.filters import maximum_filter
+from scipy.ndimage.morphology import generate_binary_structure, binary_erosion
+
+
 
 ## utility functions (called internally)
 
-def lab2instance(x):
-  d = class_semantics()
-  x[x!=d['nuc']] = 0
-  x = label(x)[0]
-  return x
+def detect_peaks(image):
+  """
+  Takes an image and detect the peaks usingthe local maximum filter.
+  Returns a boolean mask of the peaks (i.e. 1 when
+  the pixel's value is the neighborhood maximum, 0 otherwise)
+  """
+
+  # define an 8-connected neighborhood
+  neighborhood = generate_binary_structure(3,3)
+
+  #apply the local maximum filter; all pixel of maximal value 
+  #in their neighborhood are set to 1
+  local_max = maximum_filter(image, footprint=neighborhood)==image
+  #local_max is a mask that contains the peaks we are 
+  #looking for, but also the background.
+  #In order to isolate the peaks we must remove the background from the mask.
+
+  #we create the mask of the background
+  background = (image==0)
+
+  #a little technicality: we must erode the background in order to 
+  #successfully subtract it form local_max, otherwise a line will 
+  #appear along the background border (artifact of the local maximum filter)
+  eroded_background = binary_erosion(background, structure=neighborhood, border_value=1)
+
+  #we obtain the final mask, containing only peaks, 
+  #by removing the background from the local_max mask (xor operation)
+  detected_peaks = local_max ^ eroded_background
+
+  return detected_peaks
 
 def random_augmentation_xy(xpatch, ypatch, train=True):
   if random.random()<0.5:
@@ -64,28 +84,6 @@ def convolve_zyx(pimg, axes="tzyxc"):
 
 ## param definitions
 
-def channel_semantics():
-  d = dict()
-  d['mem'] = 1
-  d['nuc'] = 0
-  d['axes'] = "TZYXC" # assume permuted after opening
-  d['n_channels'] = 2
-  d['rgb'] = [d['mem'], d['nuc'], d['nuc']]
-  return d
-
-def class_semantics():
-  d = dict()
-  d['n_classes'] = 3
-  d['div'] =  1
-  d['nuc'] =  1
-  d['mem'] =  0
-  d['bg'] =  2
-  d['ignore'] =  3
-  d['rgb.mem'] =  [d['mem'], d['nuc'], d['bg']]
-  d['rgb.div'] =  [d['div'], d['mem'], d['div']]
-  d['classweights'] = [1/d['n_classes'],]*d['n_classes']
-  return d
-
 def segparams():
   # stack_segmentation_function = lambda x,p : stackseg.flat_thresh_two_chan(x, **p)
   # segmentation_params = {'nuc_mask':0.51, 'mem_mask':0.1}
@@ -102,7 +100,7 @@ def segparams():
   #                        }
   # segmentation_params = {'dist_cut': 9.780390266161866, 'mem_mask': 0.041369622211090654, 'nuc_mask': 0.5623125724186882, 'nuc_seed': 0.9610987296474213}
 
-  stack_segmentation_function = lambda x,p : stackseg.watershed_two_chan(x, **p)
+  stack_segmentation_function = lambda x,p : stack_segmentation.watershed_two_chan(x, **p)
   segmentation_params = {'nuc_mask': 0.51053067684188, 'nuc_seed': 0.9918831824422522} ## SEG:  0.7501725367486776
   segmentation_space = {'nuc_mask' :ho.hp.uniform('nuc_mask', 0.3, 0.7),
                         'nuc_seed':ho.hp.uniform('nuc_seed', 0.9, 1.0), 
@@ -117,89 +115,6 @@ def segparams():
   res['n_evals'] = 40 ## must be greater than 2 or hyperopt throws errors
   res['blur'] = False
   return res
-
-## data loading and network training
-
-def load_rawdata(homedir):
-  homedir = Path(homedir)
-
-  chansem = channel_semantics()
-  cs = class_semantics()
-
-  def condense_labels(lab):
-    d = cs
-    lab[lab==0]   = d['bg']
-    lab[lab==255] = d['mem']
-    lab[lab==168] = d['nuc']
-    lab[lab==85]  = d['div']
-    lab[lab==198] = d['nuc'] #d['ignore']
-    return lab
-
-  ## load data
-  # img = imread(str(homedir / 'data/img006.tif'))
-  img = np.load(str(homedir / 'data/img006_noconv.npy'))
-  img = perm(img,"TZCYX", "TZYXC")
-
-  # img = np.load(str(homedir / 'isonet/restored.npy'))
-  # img = img[np.newaxis,:352,...]
-  # lab = np.load(str(homedir / 'data/labels_iso_t0.npy'))
-  lab = imread(str(homedir / 'data/labels_lut.tif'))
-  lab = lab[:,:,0]
-  # lab = lab[np.newaxis,:352,...]
-
-  lab = condense_labels(lab)
-  ## TODO: this will break once we start labeling XZ and YZ in same volume.
-  mask_labeled_slices = lab.min((2,3)) < 2
-  inds_labeled_slices = np.indices(mask_labeled_slices.shape)[:,mask_labeled_slices]
-  gt_slices = np.array([lab2instance(x) for x in lab[inds_labeled_slices[0], inds_labeled_slices[1]]])
-
-  # add distance channel?
-  points = lib.mkpoints()
-  cen = np.zeros((71,400,400))
-  cen[list(points.T)] = 1
-  def f(x): return np.exp(-(x*x).sum()/10**2)
-  kern = math_utils.build_kernel_nd(100,3,f)
-  cen2 = fftconvolve(cen, kern, mode='same')
-
-  res = dict()
-  res['img'] = img
-  res['lab'] = lab
-  res['mask_labeled_slices'] = mask_labeled_slices
-  res['inds_labeled_slices'] = inds_labeled_slices
-  res['gt_slices'] = gt_slices
-  res['cellcenters'] = cen2
-  return res
-
-def compute_weights(rawdata):
-  lab = rawdata['lab']
-  mask_labeled_slices = rawdata['mask_labeled_slices']
-  inds_labeled_slices = rawdata['inds_labeled_slices']
-
-  weight_stack = np.zeros(lab.shape,dtype=np.float)
-  
-  weight_stack[inds_labeled_slices[0], inds_labeled_slices[1]] = 1 ## all the pixels that have been looked at by a human set to 1.
-
-  ignore = class_semantics()['ignore']
-  ## turn off the `ignore` class
-  weight_stack[lab==ignore] = 0
-
-  ## weight higher near object borders
-  for i in range(len(inds_labeled_slices[0])):
-    t = inds_labeled_slices[0,i]
-    z = inds_labeled_slices[1,i]
-    lab_tz = lab[t,z]
-    mask = lab_tz==class_semantics()['mem']
-    distimg = ~mask
-    distimg = distance_transform_edt(distimg)
-    distimg = np.exp(-distimg/10)
-    print(distimg.mean())
-    weight_stack[t,z] = distimg/distimg.mean()
-
-  if False: ## debug
-    ws = weight_stack[inds_labeled_slices[0], inds_labeled_slices[1]]
-    qsave(collapse2(splt(ws[:30],6,0),'12yx','1y,2x'))
-
-  return weight_stack #[inds_labeled_slices[0], inds_labeled_slices[1]]
 
 ## utils n stuff
 
@@ -236,19 +151,14 @@ def shuffle_split(xsysws):
 
   return res
 
-def train(trainable, savepath):
+def train(net, trainable, savepath, n_epochs=10, batchsize=3):
   xs_train = trainable['xs_train']
   ys_train = trainable['ys_train']
   ws_train = trainable['ws_train']
-  xs_vali = trainable['xs_vali']
-  ys_vali = trainable['ys_vali']
-  ws_vali = trainable['ws_vali']
-  cla_sem = class_semantics()
-  classweights = cla_sem['classweights']
-  net = trainable['net']
-
-  batchsize = 3
-  n_epochs  = 10
+  xs_vali  = trainable['xs_vali']
+  ys_vali  = trainable['ys_vali']
+  ws_vali  = trainable['ws_vali']
+  ysem = trainable['ysem']
 
   stepsperepoch   = xs_train.shape[0] // batchsize
   validationsteps = xs_vali.shape[0] // batchsize
@@ -256,7 +166,7 @@ def train(trainable, savepath):
   def print_stats():
     stats = dict()
     stats['batchsize'] = batchsize
-    stats['n_epochs'] = n_epochs
+    stats['n_epochs']  = n_epochs
     stats['stepsperepoch'] = stepsperepoch
     stats['validationsteps'] = validationsteps
     stats['n_samples_train'] = xs_train.shape[0]
@@ -265,7 +175,10 @@ def train(trainable, savepath):
     print(stats)
   print_stats()
 
-  checkpointer = ModelCheckpoint(filepath=str(savepath / "w001.h5"), verbose=0, save_best_only=True, save_weights_only=True)
+  current_weight_number = python_utils.glob_and_parse_filename(str(savepath / "w???.h5"))
+  if current_weight_number is None: current_weight_number = 0
+  weightname = str(savepath / "w{:03d}.h5".format(current_weight_number + 1))
+  checkpointer = ModelCheckpoint(filepath=weightname, verbose=0, save_best_only=True, save_weights_only=True)
   earlystopper = EarlyStopping(patience=30, verbose=0)
   reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
   callbacks = [checkpointer, earlystopper, reduce_lr]
@@ -296,7 +209,7 @@ def train(trainable, savepath):
                     validation_data=vgen,
                     validation_steps=validationsteps)
 
-  net.save_weights(savepath / 'w002.h5')
+  net.save_weights(str(savepath / "w{:03d}_final.h5".format(current_weight_number + 1)))
   return history
 
 ## predictions from trained network
@@ -360,7 +273,6 @@ def predict_on_new_3D_old(net,img):
   stack = np.array(stack)
   return stack
 
-
 ## plotting
 
 def plot_history(history, savepath=None):
@@ -380,98 +292,7 @@ def plot_history(history, savepath=None):
     if 'val_'+k in keys:
       plot_hist_key(k)
 
-def max_z_divchan(pimg, savepath=None):
-  "max proj across z, then merg across time"
-  ch_div = class_semantics()['div']
-  res = merg(pimg[:,...,ch_div].max(1),0)
-  io.imsave(savepath / 'max_z_divchan.png', res)
-  return res
-
-def show_results(pimg, rawdata, savepath=None):
-  img = rawdata['img']
-  lab = rawdata['lab']
-  inds = rawdata['inds_labeled_slices']
-  rgbimg = channel_semantics()['rgb']
-  rgbmem = class_semantics()['rgb.mem']
-  cs = class_semantics()
-  rgbimg = [cs['mem'],cs['nuc'],cs['nuc']]
-
-  x = img[inds[0], inds[1]][...,rgbimg]
-  x[...,2] = 0 # remove blue
-  y = lab[inds[0], inds[1]]
-  y = np_utils.to_categorical(y).reshape(y.shape + (-1,))
-  y = y[...,rgbmem]
-  z = pimg[inds[0], inds[1]][...,rgbmem]
-  ss = [slice(None,None,5), slice(None,None,4), slice(None,None,4), slice(None)]
-  def f(r):
-    r = merg(r[ss])
-    r = r / np.percentile(r, 99, axis=(0,1), keepdims=True)
-    r = np.clip(r,0,1)
-    return r
-  x,y,z = f(x), f(y), f(z)
-  res = np.concatenate([x,y,z], axis=1)
-  if savepath:
-    io.imsave(savepath / 'results_labeled_slices.png', res)
-
-  ## plot zx view for subset of y and t indices
-  yinds = np.floor(np.linspace(0,399,8)).astype(np.int)
-  x = pimg[::2,:,yinds][...,rgbmem]
-  y = img[::2,:,yinds][...,rgbimg]
-  mi,ma = np.percentile(y,[2,99],axis=(1,2,3),keepdims=True)
-  y = np.clip((y-mi)/(ma-mi),0,1)
-  y[...,2] = 0
-  x = np.stack([x,y],0)
-  x = collapse2(x, "itzyxc","yz,tix,c")
-  x = zoom(x.astype(np.float32), (5.0,1.0,1.0), order=1) ## upscale z axis by 5 for isotropic sampling
-  if savepath:
-    io.imsave(savepath / 'results_zx.png', x)
-
-  ## plot zy view for subset of x and t indices
-  xinds = np.floor(np.linspace(0,399,8)).astype(np.int)
-  x = pimg[::2,:,:,xinds][...,rgbmem]
-  y = img[::2,:,:,xinds][...,rgbimg]
-  mi,ma = np.percentile(y,[2,99],axis=(1,2,3),keepdims=True)
-  y = np.clip((y-mi)/(ma-mi),0,1)
-  y[...,2] = 0
-  x = np.stack([x,y],0)
-  x = collapse2(x, "itzyxc","xz,tiy,c")
-  x = zoom(x.astype(np.float32), (5.0,1.0,1.0), order=1) ## upscale z axis by 5 for isotropic sampling
-  if savepath:
-    io.imsave(savepath / 'results_zy.png', x)
-
-  return res
-
-def find_divisions(pimg, savepath=None):
-  ch_div = class_semantics()['div']
-  rgbdiv = class_semantics()['rgb.div']
-  x = pimg.astype(np.float32)
-  x = x[:,::6] ## downsample z
-  div = x[...,ch_div].sum((2,3))
-  val_thresh = np.percentile(div.flat, 95)
-  n_rows, n_cols = 7, min(7,x.shape[0])
-  tz = np.argwhere(div > val_thresh)[:n_rows]
-  lst = list(range(x.shape[0]))
-  x2 = np.array([x[timewindow(lst, n[0], n_cols), n[1]] for n in tz])
-  x2 = collapse(x2, [[0,2],[1,3],[4]]) # '12yxc' -> '[1y][2x][c]'
-  x2 = x2[::4,::4,rgbdiv]
-  # x2[...,0] *= 40 ## enhance division channel color!
-  # x2 = np.clip(x2, 0, 1)
-  if savepath:
-    io.imsave(savepath / 'find_divisions.png', x2)
-  return x2
-
 ## run-style functions requiring
-
-def run_predict_on_new(loaddir, savedir):
-  unet_params = json.load(open(loaddir / 'unet_params.json', 'r'))
-  net = unet.get_unet_n_pool(**unet_params)
-  net.load_weights(str(loaddir / 'w001.h5'))
-  img = np.load('data/img006_noconv.npy')
-  dz = channel_semantics()['dz']
-  pimg = predict_on_new(net, img, dz)
-  np.save(savedir / 'pimg', pimg)
-  loaddir = savedir
-  print("PREDICT COMPLETE")
 
 def optimize_segmentation(pimg, rawdata, segparams, mypath_opt):
   lab  = rawdata['lab']
@@ -688,8 +509,6 @@ def track_nhls(nhls, savepath):
   print(cost_stats, file=open(savepath / 'cost_stats.txt','w'))
   return tr
 
-
-
 history = """
 We want to move away from a script and to a library to work better with an interactive ipython.
 How should we organize this library?
@@ -819,15 +638,13 @@ We could even perform an automated segmentation on each slice w manual boundary 
 The loss got down to 0.05 in `test3` with kernel width = 5!
 
 But the results in xz and yz are still inadequate for segmentation.
-- (linearly or isonet) upscale *before* training.
-- 
 
-## Thu Jul 12 12:11:46 2018
+## Tue Jul 17 20:00:41 2018
 
-We can predict *something* for the cell centerpoint channel, but it's pretty blurry.
-We want to sharpen it up.
-Let's see how small we can make the kernel while still being able to learn.
+make n_epochs and batchsize params
 
+TODO:
+- [ ] (linearly or isonet) upscale *before* training.
 
 
 """
