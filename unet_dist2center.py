@@ -15,6 +15,8 @@ import ipdb
 import pandas as pd
 
 import train_seg_lib as ts
+patch = patchmaker
+
 
 def build_rawdata(homedir):
   img = np.load(str(homedir / 'data/img006_noconv.npy'))
@@ -33,6 +35,7 @@ def build_rawdata(homedir):
   kern = math_utils.build_kernel_nd(wid,3,f)
   kern = kern[::4] ## anisotropic kernel matches img
   
+
   if True:
     cen[list(points.T)] = 1
     cen2 = fftconvolve(cen, kern, mode='same')
@@ -55,6 +58,7 @@ def build_rawdata(homedir):
   res = dict()
   res['img'] = img[:,:,::r,::r]
   res['imgsem'] = imgsem
+  res['kern'] = kern
   res['cellcenters'] = cen2[:,::r,::r]
   return res
 
@@ -261,6 +265,40 @@ def predict(net, img, xsem, ysem):
 
   return container
 
+def detect(pimg, rawdata):
+  r = rawdata['imgsem']['r']
+  kern = rawdata['kern'][:,::r,::r]
+
+  def n_cells(pimg): return pimg.sum() / kern.sum()
+  
+  pimgcopy = pimg.copy()
+
+  borders = np.array(kern.shape)
+  padding = np.array([borders, borders]).T
+  pimgcopy = np.pad(pimgcopy, padding, mode='constant')
+
+  centers = []
+  for i in range(ceil(n_cells(pimgcopy))):
+    print(n_cells(pimgcopy))
+    ma = pimgcopy.max()
+    centroid = np.argwhere(pimgcopy == ma)[0]
+    centers.append(centroid)
+    start = centroid - np.ceil(borders/2).astype(np.int)  #+ borders
+    end   = centroid + np.floor(borders/2).astype(np.int) #+ borders
+    ss = patchmaker.se2slices(start, end)
+    print(ss, pimgcopy[centroid[0], centroid[1], centroid[2]])
+    print(patchmaker.shape_from_slice(ss))
+    pimgcopy[ss] -= kern
+
+
+
+  res = dict()
+  res['n_cells'] = n_cells
+  res['centers'] = np.array(centers)
+  return res
+
+
+
 
 history = """
 
@@ -360,16 +398,79 @@ resulting model predicts 108 cells for t==2 and 102 cells for t==1. This is good
 
 Also added a preview of trainvali that works for x,y and z views.
 
+## Wed Jul 18 11:32:15 2018
+
+See [1]. The simple technique of integrating the signal also works for us for counting cells!
+We can estimate cell density this way! The estimates for each timepoint resulting from this technique are:
+[106.01638041469874,
+ 114.6351055695662,
+ 113.91586985594505,
+ 114.59327060832476,
+ 112.37034932491525,
+ 116.04253640111408,
+ 114.48877341882898,
+ 112.42902679021451,
+ 111.61588675789606,
+ 108.85128195723728,
+ 107.38460025291587]
+
+These are much better estimates than what we get from trying to maximize the number of cells that
+we get out of a flat threshold segmentation!
+Now how do we turn this density estimate into centerpoint detection and, ultimately, segmentation?
+
+IDEA! Let's try the following:
+So we want some kind of non-max-suppression, but we don't want a harsh method like placing a forbidden
+mask region around each extracted maximum. There is a much more natural way of extraction for this output!
+We find the global max in the image, and then we simply subtract the kernel centered at that location!
+Ideally this means that even if two cells overlap heavily we will be able to identify the max of one
+and then subtract it's kernel, leaving only the kernel of the second!
+This way we also have total control over the *number* of maxima which are extracted.
+And there are zero free parameters introduced in the detection phase! (local max requires choosing a neighborhood shape for non-max-suppression)
+BUT this technique will fail for cells which overlap heavily if the max appears right in the midpoint of 
+the two cells. Then the density is split in half. Is there some way we can search for the 
+gaussian mixture which best fits the resulting density distribution? This is the best way,
+but it is also computationally overly expensive. Even though we know exactly the number of gaussians to pick!
+
+EXTENSION:
+Extend the idea of using different classes in your pixelwise classifier to this type of problem.
+Use a different pixel value for your cell centerpoint annotations to differentiate between
+different cell types! Especially between mitotic and interphase, but potentially also between
+normal internal retina cells oriented along the apical/basal tissue axis vs those on the exterior.
+
+Now we've implemented the detection of cells from pimg according to the scheme described above:
+find max, subtract kern centered at max, repeat. The centers are well separated, but they don't
+seem to agree with the ground truth centroids from the first image... hmmmm.... doing a thresh 
+and then finding center of thresh region is more robust against "noise" / fluctuations in the 
+peaks of the predicted density images....
+
+LIT:
+[1] 2018, 67, Microscopy cell counting and detection with fully convolutional regression networks
+  - They do 2d regression of gaussian kernels placed at manually annotated centerpoints.
+    They show that this type of gt data makes it easy to estimate cell number by integrating!
+  - They argue that there is no need to use skip layers because:
+    "deep networks that can represent highly semantic information are not necessary; and (ii), based on this,
+    we consider only simple architectures (no skip layers)."
+  - tried nets with 1.3 and 3.6 million params.
+  - bilinear interpolation upsampling
+  - They find the networks difficult to train for exactly the same reasons as i do:
+  "Moreover, even for non-zero regions, the peak value of a Gaussian with σ = 2is only about 0.07, the networks tend to be very difficult to train."
+  - To alleviate this problem, we simply scale the Gaussian-annotated ground truth (Figure 1 (b)) by a factor of 100, forcing the network
+    to fit the Gaussian shapes rather than background zeros. After pretraining with patches, we fine-tune the parameters
+    with whole images to smooth the estimated density map, since the 100 × 100 image patches sometimes may only contain part
+    of a cell on the boundary.
+  - They only describe detection as "taking local maxima"... never details...
+
+
 
 TODO:
-- [ ] train model succesfully that includes black border in xs
+- [x] train model succesfully that includes black border in xs
 - [ ] train to saturation
-- [ ] find sig values that is always stable
+- [ ] find sig values that are always stable
 - [ ] tracking from centerpoint matching
 - [ ] change training data s.t. centerpoints don't clip at boundaries but extend beyond them
       - this is just like the shape completion version of stardist!
 - [ ] callback for saving/visualizing patch predictions over epochs
-- [ ] 3D show_trainvali
+- [x] 3D show_trainvali
 - [ ] 
 
 

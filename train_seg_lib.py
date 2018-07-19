@@ -1,3 +1,4 @@
+from segtools.defaults.ipython import *
 from segtools.defaults.training import *
 
 from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStopping, TensorBoard, ReduceLROnPlateau
@@ -251,9 +252,9 @@ def predict_on_new_3D_old(net,img):
     for ax in ["ZYXC"]: #, "YXZC", "XZYC"]:
       x = perm(img[t], "ZCYX", ax)
       # x = unet.add_z_to_chan(x, dz, axes="ZYXC") # lying about direction of Z!
-      slices = patch.slices_grid(x.shape[:-1], (64,128,128), coverall=False)
+      slices = patchmaker.slices_grid(x.shape[:-1], (64,128,128), coverall=False)
       b = 20
-      slices_all = patch.make_triplets(slices, (b,b,b))
+      slices_all = patchmaker.make_triplets(slices, (b,b,b))
       # ipdb.set_trace()
       pimg = np.zeros(x.shape[:-1] + (3,))
       x = np.pad(x, [(b,b)]*3 + [(0,0)], 'constant')
@@ -455,7 +456,7 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
   gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
   pre_slices = hyp[inds[0], inds[1]]
   # container = np.zeros((1600,1600,3))
-  # slices = patch.slices_heterostride((1600,1600),(400,400))
+  # slices = patchmaker.slices_heterostride((1600,1600),(400,400))
   gspec = matplotlib.gridspec.GridSpec(4, 4)
   gspec.update(wspace=0., hspace=0.)
   fig = plt.figure()
@@ -532,7 +533,7 @@ Instance segmentation and hyper optimization are totally independent?
 
 The shape of Xs and Ys and totally coupled to the model.
 There are a few params we can adjust when building X and Y...
-Input/Output patch size. (just make sure that it's divisible by 2**n_maxpool)
+Input/Output patchmaker size. (just make sure that it's divisible by 2**n_maxpool)
 Most conv nets accept multiple different sizes of input patches.
 We can adjust pixelwise weights and masks on the loss including slice masks and border weights.
 weights are strict generalization of mask, or?
