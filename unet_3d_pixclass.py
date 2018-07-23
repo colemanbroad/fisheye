@@ -1,22 +1,15 @@
-from segtools.defaults.ipython_remote import *
-# from ipython_remote_defaults import *
+from segtools.defaults.ipython import *
 from segtools.defaults.training import *
-from segtools.numpy_utils import collapse2
-from segtools import math_utils
-from scipy.signal import fftconvolve
+
 import lib
 
-from keras.models import Model
-from keras.layers import Input
-from keras import losses
-import keras.backend as K
-
 import gputools
-from contextlib import redirect_stdout
 import ipdb
 import pandas as pd
 
+from contextlib import redirect_stdout
 import train_seg_lib as ts
+
 
 def lab2instance(x, d):
   x[x!=d['nuc']] = 0
@@ -38,7 +31,7 @@ def build_rawdata(homedir):
   # img = imread(str(homedir / 'data/img006.tif'))
   img = np.load(str(homedir / 'data/img006_noconv.npy'))
   img = perm(img,"TZCYX", "TZYXC")
-  imgsem = {'axes':"TZYXC", 'nuc':0, 'mem':1}
+  imgsem = {'axes':"TZYXC", 'nuc':0, 'mem':1, 'n_channels':2}
 
   # img = np.load(str(homedir / 'isonet/restored.npy'))
   # img = img[np.newaxis,:352,...]
@@ -83,7 +76,7 @@ def compute_weights(rawdata):
     t = inds_labeled_slices[0,i]
     z = inds_labeled_slices[1,i]
     lab_tz = lab[t,z]
-    mask = lab_tz==class_semantics()['mem']
+    mask = lab_tz==labsem['mem']
     distimg = ~mask
     distimg = distance_transform_edt(distimg)
     distimg = np.exp(-distimg/10)
@@ -99,35 +92,36 @@ def compute_weights(rawdata):
 def build_trainable(rawdata):
   img = rawdata['img']
   lab = rawdata['lab']
+  labsem = rawdata['labsem']
 
-  cha = channel_semantics()
-  cla = class_semantics()
+  xsem = {'n_channels':2, 'mem':0, 'nuc':1, 'shape':(None,None,None,2)}
+  ysem = {'n_channels':3, 'nuc':1, 'mem':0, 'bg':2, 'weight_channel_ytrue':False, 
+          'shape':(None,None,None,3), 'classweights':[1/3]*3,}
 
-  def f_xsem():
-    d = dict()
-    d['n_channels'] = 2
-    d['mem'] = 0
-    d['nuc'] = 1
-    d['rgb']  = [d['mem'], d['nuc'], d['nuc']]
-    return d
-  xsem = f_xsem()
-  ysem = {'n_channels':3, 'nuc':1, 'mem':0, 'bg':2, 'weight_channel_ytrue':True, 'shape':(None,None,None,3)}
+  weight_stack = compute_weights(rawdata)
 
-  weight_stack = ts.compute_weights(rawdata)
+  ## build slices
+  patchsize = (1,12,100,100)
+  assert 4 in factors(patchsize[1])
+  # borders = (0,10,10,10)
+  res = patchmaker.patchtool({'sh_img':img.shape[:-1], 'sh_patch':patchsize, 'overlap_factor':(1,2,1,1)})
+  slices = res['slices']
+  xsem['patchsize'] = patchsize
+  # xsem['borders'] = borders
 
-  ## padding
-  padding = [(0,0)]*5
-  padding[1] = (10,10)
-  img = np.pad(img, padding, 'constant')
-  lab = np.pad(lab, padding[:-1], 'constant', constant_values=cla['bg'])
-  weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
+  ## pad images to work with slices
+  if False:
+    padding = [(b,b) for b in borders] + [(0,0)]
+    img = np.pad(img, padding, 'constant')
+    lab = np.pad(lab, padding[:-1], 'constant', constant_values=labsem['bg'])
+    weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
 
   ## extract slices and build xs,ys,ws
-  slices0 = patch.slices_heterostride(lab.shape,(1,32,128,128),(11,30,2,2))
-  slices = [s for s in slices0 if (lab[s][0,10:20]<2).sum() > 0] ## filter out all slices without much training data
-  xs = np.array([img[ss][0] for ss in slices])
-  ys = np.array([lab[ss][0] for ss in slices])
-  ws = np.array([weight_stack[ss][0] for ss in slices])
+  slices_filtered = [s for s in slices if (lab[s][0,2:8]<2).sum() > 0] ## filter out all slices without much training data
+  slices_filtered = slices_filtered[:20]
+  xs = np.array([img[ss][0] for ss in slices_filtered])
+  ys = np.array([lab[ss][0] for ss in slices_filtered])
+  ws = np.array([weight_stack[ss][0] for ss in slices_filtered])
   ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
 
   ## normalize over space. sample and channel independent
@@ -135,11 +129,11 @@ def build_trainable(rawdata):
   
   print(xs.shape, ys.shape, ws.shape)
 
-  res = shuffle_split({'xs':xs,'ys':ys,'ws':ws})
+  res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws})
   res['xsem'] = xsem
   res['ysem'] = ysem
   res['slices'] = slices
-  res['slices0'] = slices0
+  res['slices_filtered'] = slices_filtered
   return res
 
 def build_net(xsem, ysem):
@@ -147,60 +141,127 @@ def build_net(xsem, ysem):
     'n_pool' : 2,
     'n_convolutions_first_layer' : 16,
     'dropout_fraction' : 0.2,
-    'kern_width' : 5,
+    'kern_width' : 3,
   }
-  input0 = Input((None, None, None, xsem['n_channels']))
+
+  input0 = Input(xsem['shape'])
   unet_out = unet.get_unet_n_pool(input0, **unet_params)
-  output1 = unet.acti(unet_out, ysem['n_channels'])
-  net = Model(inputs=input0, outputs=output2)
+  output0 = unet.acti(unet_out, ysem['n_channels'], last_activation='softmax', name='B')
+
+  net = Model(inputs=input0, outputs=output0)
 
   optim = Adam(lr=1e-4)
 
-  if ysem['weight_channel_ytrue'] == True:
-    loss = unet.weighted_categorical_crossentropy(classweights=classweights, itd=0)
-    def met0(y_true, y_pred):
-      return losses.accuracy(y_true[...,:-1], y_pred)
-  else:
-    loss  = unet.my_categorical_crossentropy(classweights=classweights, itd=0)
-    met0 = losses.accuracy
+  ss = [slice(None), slice(2,-2), slice(2,-2), slice(2,-2), slice(None)]
 
-  
-  net.compile(optimizer=optim, loss={'B':losses.mean_absolute_error}, metrics={'B':met0}) # metrics=['accuracy'])
+  if ysem['weight_channel_ytrue'] == True:
+    loss = unet.weighted_categorical_crossentropy()
+    def met0(y_true, y_pred):
+      return metrics.categorical_accuracy(y_true[...,:-1], y_pred)
+  else:
+    loss = unet.my_categorical_crossentropy()
+    met0 = metrics.categorical_accuracy
+
+  net.compile(optimizer=optim, loss={'B':loss}, metrics={'B':met0}) # metrics=['accuracy'])
   return net
 
-
-
-def predict_trainvali(trainable, savepath=None):
-  net = trainable['net']
+def show_trainvali(trainable, savepath):
   xs_train = trainable['xs_train']
-  xs_vali = trainable['xs_vali']
+  xs_vali  = trainable['xs_vali']
+  ys_train = trainable['ys_train']
+  ys_vali  = trainable['ys_vali']
+  ws_train = trainable['ws_train']
+  ws_vali  = trainable['ws_vali']
   xsem = trainable['xsem']
   ysem = trainable['ysem']
-
-  rgb_ys = ysem['rgb']
-  rgb_xs = xsem['rgb']
-  pred_xs_train = net.predict(xs_train, batch_size=1)
-  pred_xs_vali = net.predict(xs_vali, batch_size=1)
-
-  x = xs_train[::10,...,rgb_xs]
-  y = pred_xs_train[::10,...,rgb_ys]
-  xy = np.stack([x,y],0)
-  res1 = collapse2(xy, 'iszyxc', 'szy,ix,c')
-
-  x = xs_vali[::10,...,rgb_xs]
-  y = pred_xs_vali[::10,...,rgb_ys]
-  xy = np.stack([x,y],0)
-  res2 = collapse2(xy, 'iszyxc', 'szy,ix,c')
+  xrgb = [xsem['mem'], xsem['nuc'], xsem['nuc']]
+  yrgb = [ysem['mem'], ysem['nuc'], ysem['bg']]
 
   def norm(img):
-    img = img / img.mean() / 5
+    # img = img / img.mean() / 5
+    mi,ma = img.min(), img.max()
+    # mi,ma = np.percentile(img, [5,95])
+    img = (img-mi)/(ma-mi)
     img = np.clip(img, 0, 1)
     return img
 
-  if savepath: io.imsave(savepath / 'pred_xs_train.png', norm(res1))
-  if savepath: io.imsave(savepath / 'pred_xs_vali.png', norm(res2))
+  def plot(xs, ys):
+    xs = norm(xs[...,xrgb])
+    ys = norm(ys[...,yrgb])
+    xs[...,2] = 0
+    res = np.stack([xs,ys],0)
+    res = collapse2(res, 'isyxc','sy,ix,c')
+    return res
 
-  return res1, res2
+  def mid(arr,i):
+    ss = [slice(None) for _ in arr.shape]
+    ss[i] = arr.shape[i]//2
+    return arr[ss]
+
+
+  def doit(i):
+    res1 = plot(mid(xs_train,i), mid(ys_train,i))
+    res2 = plot(mid(xs_vali,i), mid(ys_vali,i))
+    if i in {2,3}:
+      res1 = zoom(res1, (5,1,1), order=1)
+      res2 = zoom(res2, (5,1,1), order=1)
+    io.imsave(savepath / 'dat_train_{:d}.png'.format(i), res1)
+    io.imsave(savepath / 'dat_vali_{:d}.png'.format(i), res2)
+
+  doit(1) # z
+  doit(2) # y
+  doit(3) # x
+
+def predict_trainvali(net, trainable, savepath=None):
+  xs_train = trainable['xs_train']
+  xs_vali  = trainable['xs_vali']
+  ys_train = trainable['ys_train']
+  ys_vali  = trainable['ys_vali']
+  ws_train = trainable['ws_train']
+  ws_vali  = trainable['ws_vali']
+  xsem = trainable['xsem']
+  ysem = trainable['ysem']
+  xrgb = [xsem['mem'], xsem['nuc'], xsem['nuc']]
+  yrgb = [ysem['mem'], ysem['nuc'], ysem['bg']]
+
+  pred_xs_train = net.predict(xs_train, batch_size=1)
+  pred_xs_vali = net.predict(xs_vali, batch_size=1)
+
+  def norm(img):
+    # img = img / img.mean() / 5
+    mi,ma = img.min(), img.max()
+    # mi,ma = np.percentile(img, [5,95])
+    img = (img-mi)/(ma-mi)
+    img = np.clip(img, 0, 1)
+    return img
+
+  def plot(xs, ys, preds):
+    xs = norm(xs[...,xrgb])
+    ys = norm(ys[...,yrgb])
+    preds = norm(preds[...,yrgb])
+    xs[...,2] = 0
+    res = np.stack([xs,ys,preds],0)
+    res = collapse2(res, 'isyxc','sy,ix,c')
+    return res
+
+  def mid(arr,i):
+    ss = [slice(None) for _ in arr.shape]
+    ss[i] = arr.shape[i]//2
+    return arr[ss]
+
+  def doit(i):
+    res1 = plot(mid(xs_train,i), mid(ys_train,i), mid(pred_xs_train,i))
+    res2 = plot(mid(xs_vali,i), mid(ys_vali,i), mid(pred_xs_vali,i))
+    if i in {2,3}:
+      res1 = zoom(res1, (5,1,1), order=1)
+      res2 = zoom(res2, (5,1,1), order=1)
+    io.imsave(savepath / 'pred_train_{:d}.png'.format(i), res1)
+    io.imsave(savepath / 'pred_vali_{:d}.png'.format(i), res2)
+
+  doit(1) # z
+  doit(2) # y
+  doit(3) # x
+
 
 def predict(net,img,xsem):
   clasem = class_semantics()
@@ -211,8 +272,8 @@ def predict(net,img,xsem):
   sh_container  = np.array((1,20,400,400))
   extra = [0,10,0,0]
 
-  slices   = patch.slices_heterostride(sh_img[:-1], sh_container, np.ceil(sh_img[:-1]/sh_container))
-  triplets = patch.make_triplets(slices, extra)
+  slices   = patchmaker.slices_heterostride(sh_img[:-1], sh_container, np.ceil(sh_img[:-1]/sh_container))
+  triplets = patchmaker.make_triplets(slices, extra)
 
   padding = [(0,0)]*5
   padding[1] = (10,10)
@@ -224,7 +285,6 @@ def predict(net,img,xsem):
     container[sc] = net.predict(x)[so]
 
   return container
-
 
 ## divisions and results
 
@@ -317,6 +377,10 @@ history = """
 
 Move unet3D to it's own module.
 
+## Thu Jul 19 21:41:55 2018
 
+I've got memory problems. These problems can only be fixed by saving xs and ys to disk.
+Then our generator will load them from disk.
+The memory problems were caused by an obvious
 
 """

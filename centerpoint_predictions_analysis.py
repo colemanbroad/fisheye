@@ -1,26 +1,40 @@
 pimg = qopene() ## cell centerpoint prediction from u-net
 
-## estimate number of cell centerpoints
-## TODO: introduce non-max suppression?
-x = np.linspace(0.2,1.5,100)
-y = [label(pimg>i)[1] for i in x]
-y = np.array(y)
-plt.figure()
-plt.plot(x, y)
-y1 = y[1:]-y[:-1]
-i = np.argmax(y)
-yneg = np.where(y1<0,y1,0)
-n_fused = -yneg[:i].sum()
-estimated_number_of_cells = n_fused + y[i]
-optthresh = x[i]
-
-## plot centroid for each cell and compare to gt (time zero only)
-seg = label(pimg>x[i])[0]
-nhl = nhl_tools.hyp2nhl(seg)
-centroids = [a['centroid'] for a in nhl]
-centroids = np.array(centroids)
-
+centroids = dc.detect2(pimg, rawdata)
 centroids_gt = lib.mkpoints()
+
+
+from scipy.optimize import linear_sum_assignment
+# cost = np.matmul(centroids, centroids_gt)
+cost = np.zeros((len(centroids), len(centroids_gt)))
+for i,c in enumerate(centroids):
+  for j,d in enumerate(centroids_gt):
+    cost[i,j] = np.linalg.norm(c-d)
+res = linear_sum_assignment(cost)
+
+## timimg
+sh = (100,3)
+x = np.random.rand(*sh)*100
+y = x + np.random.rand(*sh)*5
+
+def munkres_pts(x,y):
+  "40s for 1k 3D pts"
+  cost = np.zeros((len(x), len(y)))
+  for i,c in enumerate(x):
+    for j,d in enumerate(y):
+      cost[i,j] = np.linalg.norm(c-d)
+  res = linear_sum_assignment(cost)
+  return res
+
+
+## Easy!
+
+from mpl_toolkits.mplot3d import Axes3D
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+# ax.scatter(*centroids_gt.T)
+# ax.scatter(*centroids2.T)
+ax.scatter(*centroids.T, c=np.array(det['remaining']))
 
 plt.figure()
 plt.scatter(centroids_gt[:,0],centroids_gt[:,1])

@@ -63,9 +63,6 @@ for k,v in coords_dict.items():
 
 
 
-
-
-
 thoughts = """
 There are only ten or so cells in each image!
 Almost nothing.
@@ -76,11 +73,13 @@ We don't even know which pixels are bg class!
 The trajectories of each cell in the neural lineage can be found projected onto XY and
 colored from tan to purple in `not001`.
 
-Wed Jul 18 15:58:35 2018
+## Wed Jul 18 15:58:35 2018
 
 It's easy to see the trajectories when plotted in this way in 3D. See `res068`.
 Notice how sparse the cells are. If we could eliminate the remaining cells in the image these would be
 easy to track using centerpoints alone!
+
+
 
 
 """

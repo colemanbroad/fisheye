@@ -1,18 +1,13 @@
-from segtools.defaults.ipython_remote import *
+from segtools.defaults.ipython import *
 from segtools.defaults.training import *
 
-from scipy.signal import fftconvolve
 import lib
 
-from keras.models import Model
-from keras.layers import Input
-from keras import losses
-import keras.backend as K
-
 import gputools
-from contextlib import redirect_stdout
 import ipdb
 import pandas as pd
+
+from contextlib import redirect_stdout
 
 import train_seg_lib as ts
 patch = patchmaker
@@ -84,6 +79,7 @@ def build_trainable(rawdata):
   res = patch.patchtool({'sh_img':cellcenters.shape, 'sh_patch':patchsize, 'sh_borders':borders}) #'overlap_factor':(2,1,1)})
   slices = res['slices_padded']
   xsem['patchsize'] = patchsize
+  xsem['borders'] = borders
 
   ## pad images
   cat = np.concatenate
@@ -147,7 +143,7 @@ def show_trainvali(trainable, savepath):
   xsem = trainable['xsem']
   ysem = trainable['ysem']
   xrgb = [xsem['mem'], xsem['nuc'], xsem['nuc']]
-  yrgb = [ysem['gauss']]*3
+  yrgb = [ysem['mem'], ysem['nuc'], ysem['bg']]
 
   def norm(img):
     # img = img / img.mean() / 5
@@ -165,30 +161,75 @@ def show_trainvali(trainable, savepath):
     res = collapse2(res, 'isyxc','sy,ix,c')
     return res
 
-  res = plot(xs_train.max(1), ys_train.max(1))
-  io.imsave(savepath / 'dat_train_z.png', res)
-  res = plot(xs_vali.max(1), ys_vali.max(1))
-  io.imsave(savepath / 'dat_vali_z.png', res)
+  def mid(arr,i):
+    # ss = [slice(None) for _ in arr.shape]
+    # ss[i] = arr.shape[i]//2
+    # return arr[ss]
+    return arr.max(i)
 
-  res = plot(xs_train.max(2), ys_train.max(2))
-  io.imsave(savepath / 'dat_train_y.png', res)
-  res = plot(xs_vali.max(2), ys_vali.max(2))
-  io.imsave(savepath / 'dat_vali_y.png', res)
 
-  res = plot(xs_train.max(3), ys_train.max(3))
-  io.imsave(savepath / 'dat_train_x.png', res)
-  res = plot(xs_vali.max(3), ys_vali.max(3))
-  io.imsave(savepath / 'dat_vali_x.png', res)
+  def doit(i):
+    res = plot(mid(xs_train,i), mid(ys_train,i))
+    io.imsave(savepath / 'dat_train_{:d}.png'.format(i), res)
+    res = plot(mid(xs_vali,i), mid(ys_vali,i))
+    io.imsave(savepath / 'dat_vali_{:d}.png'.format(i), res)
 
-  if False:
-    wz = xsem['patchsize'][0]
-    middle_z = slice(2*wz//5,3*wz//5)
-    xs_train = xs_train[:,middle_z].max(1)
-    xs_vali  = xs_vali[:,middle_z].max(1)
-    ys_train = ys_train[:,middle_z].max(1)
-    ys_vali  = ys_vali[:,middle_z].max(1)
+  doit(1) # z
+  doit(2) # y
+  doit(3) # x
 
 def predict_trainvali(net, trainable, savepath=None):
+  xs_train = trainable['xs_train']
+  xs_vali  = trainable['xs_vali']
+  ys_train = trainable['ys_train']
+  ys_vali  = trainable['ys_vali']
+  ws_train = trainable['ws_train']
+  ws_vali  = trainable['ws_vali']
+  xsem = trainable['xsem']
+  ysem = trainable['ysem']
+  xrgb = [xsem['mem'], xsem['nuc'], xsem['nuc']]
+  yrgb = [ysem['mem'], ysem['nuc'], ysem['bg']]
+
+  pred_xs_train = net.predict(xs_train, batch_size=1)
+  pred_xs_vali = net.predict(xs_vali, batch_size=1)
+
+  def norm(img):
+    # img = img / img.mean() / 5
+    mi,ma = img.min(), img.max()
+    # mi,ma = np.percentile(img, [5,95])
+    img = (img-mi)/(ma-mi)
+    img = np.clip(img, 0, 1)
+    return img
+
+  def plot(xs, ys, preds):
+    xs = norm(xs[...,xrgb])
+    ys = norm(ys[...,yrgb])
+    preds = norm(preds[...,yrgb])
+    xs[...,2] = 0
+    res = np.stack([xs,ys,preds],0)
+    res = collapse2(res, 'isyxc','sy,ix,c')
+    return res
+
+  def mid(arr,i):
+    # ss = [slice(None) for _ in arr.shape]
+    # ss[i] = arr.shape[i]//2
+    # return arr[ss]
+    return arr.max(i)
+
+  def doit(i):
+    res1 = plot(mid(xs_train,i), mid(ys_train,i), mid(pred_xs_train,i))
+    res2 = plot(mid(xs_vali,i), mid(ys_vali,i), mid(pred_xs_vali,i))
+    if i in {2,3}:
+      res1 = zoom(res1, (5,1,1), order=1)
+      res2 = zoom(res2, (5,1,1), order=1)
+    io.imsave(savepath / 'pred_train_{:d}.png'.format(i), res1)
+    io.imsave(savepath / 'pred_vali_{:d}.png'.format(i), res2)
+
+  doit(1) # z
+  doit(2) # y
+  doit(3) # x
+
+def predict_trainvali_1(net, trainable, savepath=None):
   xs_train = trainable['xs_train']
   xs_vali = trainable['xs_vali']
   ys_train = trainable['ys_train']
@@ -265,7 +306,7 @@ def predict(net, img, xsem, ysem):
 
   return container
 
-def detect(pimg, rawdata):
+def detect(pimg, rawdata, n=None):
   r = rawdata['imgsem']['r']
   kern = rawdata['kern'][:,::r,::r]
 
@@ -277,24 +318,66 @@ def detect(pimg, rawdata):
   padding = np.array([borders, borders]).T
   pimgcopy = np.pad(pimgcopy, padding, mode='constant')
 
-  centers = []
-  for i in range(ceil(n_cells(pimgcopy))):
-    print(n_cells(pimgcopy))
+  if n is None: n = ceil(n_cells(pimgcopy))
+
+  centroids = []
+  n_remaining = []
+  peaks = []
+
+  for i in range(n):
+    nc = n_cells(pimgcopy)
+    n_remaining.append(nc)
     ma = pimgcopy.max()
+    peaks.append(ma)
     centroid = np.argwhere(pimgcopy == ma)[0]
-    centers.append(centroid)
+    centroids.append(centroid)
     start = centroid - np.ceil(borders/2).astype(np.int)  #+ borders
     end   = centroid + np.floor(borders/2).astype(np.int) #+ borders
     ss = patchmaker.se2slices(start, end)
     print(ss, pimgcopy[centroid[0], centroid[1], centroid[2]])
     print(patchmaker.shape_from_slice(ss))
     pimgcopy[ss] -= kern
+    pimgcopy = pimgcopy.clip(min=0)
 
-
+  centroids = np.array(centroids) - borders[np.newaxis,:]
+  centroids[:,[1,2]] *= r
 
   res = dict()
   res['n_cells'] = n_cells
-  res['centers'] = np.array(centers)
+  res['centroids'] = centroids
+  res['remaining'] = n_remaining
+  res['peaks'] = peaks
+  return res
+
+def detect2(pimg, rawdata):
+  ## estimate number of cell centerpoints
+  ## TODO: introduce non-max suppression?
+  r = rawdata['imgsem']['r']
+  kern = rawdata['kern']
+  mi,ma = 0.2*kern.max(), 1.5*kern.max()
+  thresholds = np.linspace(mi,ma,100)
+  n_cells = [label(pimg>i)[1] for i in thresholds]
+  n_cells = np.array(n_cells)
+  delta = n_cells[1:]-n_cells[:-1]
+  thresh_maxcells = np.argmax(n_cells)
+  yneg = np.where(delta<0,delta,0)
+  n_fused = -yneg[:thresh_maxcells].sum()
+  estimated_number_of_cells = n_fused + n_cells[thresh_maxcells]
+  optthresh = thresholds[thresh_maxcells]
+
+  ## plot centroid for each cell and compare to gt (time zero only)
+  seg = label(pimg>optthresh)[0]
+  nhl = nhl_tools.hyp2nhl(seg)
+  centroids = [a['centroid'] for a in nhl]
+  centroids = np.array(centroids)
+
+  centroids[:,[1,2]] *= r
+
+  res = dict()
+  res['thresh'] = optthresh
+  res['centroids'] = centroids
+  res['n_cells'] = n_cells[thresh_maxcells]
+  res['n_fused'] = n_fused
   return res
 
 
@@ -443,6 +526,54 @@ seem to agree with the ground truth centroids from the first image... hmmmm.... 
 and then finding center of thresh region is more robust against "noise" / fluctuations in the 
 peaks of the predicted density images....
 
+## Thu Jul 19 13:20:57 2018
+
+See if this no-param detection technique works.
+It does!
+How can we determine which centerpoint detection method works best?
+We have ground truth centerpoints and we want to compare detection methods.
+So far we've been doing visual analysis. It's pretty easy to see when points align.
+It's even relatively easy to guess when points have been split or fused!
+We can try matching the pointclouds and comparing matching scores?
+We can even plot the pointclouds from the ground truth along with *both* detection alternatives.
+This shows us that they agree very well almost everywhere. And both make similar mistakes.
+
+More ways of evaluating detection performance:
+Plotting pimg as the 3rd color channel in a stackview (3D view?) of img.
+This doesn't actually compare detection methods, but allows you to visually see the quality of the 
+output.
+
+Can and should we do matching to ground truth?
+We want a numerical way of scoring the quality of the detection phase independently of the density phase.
+For cell segmentation we had `seg`, even though our pixelwise classes were trained with crossentropy.
+There must be standard metrics?
+- minimal distance matching
+- 1-1 only? or n-1?
+- n-1 matching:
+  - voronoi tessellation around gt points
+  - every point matches to it's closest neighbor in the gt
+- n-1 *soft* matching
+  - use a kernel centered around gt points (or proposed points) and soft assign based on kernel values
+    and normalize across connected-to points
+- allow for alignment/translation/rotation/warps before computing matching score?
+
+## Fri Jul 20 09:16:57 2018
+
+I want to see what kinds of cell localization/detection metrics are commonly used.
+Does the cell tracking challenge use a metric for evaluating localization accuracy?
+Yes they first perform a hard matching between gt and proposed particle centers by minimizing
+the total distance between pairs using the Munkres algorithm.
+What is the cost of cells that don't match to anything?
+If all costs are positive isn't the best solution no matches at all?
+Does munkres alg find a min cost maximum bipartite matching?
+Is this what we want? Or do we want the matching algorithm to decide how many matches there are?
+The particle tracking challenge use dummy tracks s.t. the ground truth points always match to something.
+what is the cost of a match to a dummy track? This is a free parameter.
+It could just be whatever the maximum real distance is between points...
+
+Easy! Just use the linear sum assignment function from scipy.optimize. This uses the hungarian matching 
+(munkres) algorithm to do a 
+
 LIT:
 [1] 2018, 67, Microscopy cell counting and detection with fully convolutional regression networks
   - They do 2d regression of gaussian kernels placed at manually annotated centerpoints.
@@ -459,6 +590,20 @@ LIT:
     with whole images to smooth the estimated density map, since the 100 × 100 image patches sometimes may only contain part
     of a cell on the boundary.
   - They only describe detection as "taking local maxima"... never details...
+[2] 2017, 19, Learning non-maximum suppression https://www.youtube.com/watch?v=SnYMimFnKuY
+[3] 2015, 54, End-to-end integration of a convolution network, deformable parts model and non-maximum suppression
+[4] 2015, 25, You should use regression to detect cells. https://www.youtube.com/watch?v=4FhdkiZ51Js
+[5] 2014, 32, Non-Maximum Suppression for Object Detection by Passing Messages between Windows
+  - Affinity Propagation Clustering (APC) is used to cluster proposals
+  - resulting bounding box / object choice is taken as representative of each group
+  - segmentation via thresholding + connected components is also a clustering technique, albeit
+    very simple. But it is used in different way. The shape of the cell *is* the shape of the cluster,
+    vs the shape / location of the cell is fully described by every element/pixel in the cluster and we need to
+    find the best by taking an average or a representative element.
+  - any clustering technique will work for this task!
+  - 
+[6] 2010, 333, Learning to count objects in images. (learn density but avoid detection/localization)
+[7] Objective Comparison of Particle Tracking Methods. Uses munkres matching and total distance as point matching metric.
 
 
 
@@ -471,7 +616,7 @@ TODO:
       - this is just like the shape completion version of stardist!
 - [ ] callback for saving/visualizing patch predictions over epochs
 - [x] 3D show_trainvali
-- [ ] 
+- [ ] scatterplot with color value showing peak score
 
 
 """

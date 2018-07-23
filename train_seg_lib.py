@@ -1,8 +1,6 @@
 from segtools.defaults.ipython import *
 from segtools.defaults.training import *
 
-from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStopping, TensorBoard, ReduceLROnPlateau
-
 from contextlib import redirect_stdout
 import ipdb
 import pandas as pd
@@ -176,7 +174,7 @@ def train(net, trainable, savepath, n_epochs=10, batchsize=3):
     print(stats)
   print_stats()
 
-  current_weight_number = python_utils.glob_and_parse_filename(str(savepath / "w???.h5"))
+  current_weight_number = glob_and_parse_filename(str(savepath / "w???.h5"))
   if current_weight_number is None: current_weight_number = 0
   weightname = str(savepath / "w{:03d}.h5".format(current_weight_number + 1))
   checkpointer = ModelCheckpoint(filepath=weightname, verbose=0, save_best_only=True, save_weights_only=True)

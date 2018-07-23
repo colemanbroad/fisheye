@@ -1,6 +1,7 @@
 from segtools.defaults.ipython_remote import *
 import train_seg_lib as ts
 import unet_dist2center as dc
+import unet_3d_pixclass as u3
 
 homedir = Path('./')
 loaddir = Path('training/test/')
