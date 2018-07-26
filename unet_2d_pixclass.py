@@ -126,17 +126,16 @@ def build_trainable(rawdata):
   ws = np.array([weight_stack[ss][0] for ss in slices_filtered])
   ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
 
+  ## normalize over space. sample and channel independent
+  xs = xs/np.mean(xs,(1,2,3), keepdims=True)
+
   ## move z to channels
   xs = collapse2(xs, 'szyxc','s,y,x,zc') ## szyxc
   ys = ys[:,xsem['dz']] ## szyxc
   ws = ws[:,xsem['dz']] ## szyx
 
-
   if ysem['weight_channel_ytrue']:
     ys = np.concatenate([ys, ws[...,np.newaxis]], -1)
-
-  ## normalize over space. sample and channel independent
-  xs = xs/np.mean(xs,(1,2,3), keepdims=True)
   
   print(xs.shape, ys.shape, ws.shape)
 
@@ -188,7 +187,8 @@ def show_trainvali(trainable, savepath):
 
   def norm(img):
     # img = img / img.mean() / 5
-    mi,ma = img.min(), img.max()
+    axis = tuple(np.arange(len(img.shape)-1))
+    mi,ma = img.min(axis,keepdims=True), img.max(axis,keepdims=True)
     # mi,ma = np.percentile(img, [5,95])
     img = (img-mi)/(ma-mi)
     img = np.clip(img, 0, 1)
@@ -230,7 +230,8 @@ def predict_trainvali(net, trainable, savepath=None):
 
   def norm(img):
     # img = img / img.mean() / 5
-    mi,ma = img.min(), img.max()
+    axis = tuple(np.arange(len(img.shape)-1))
+    mi,ma = img.min(axis,keepdims=True), img.max(axis,keepdims=True)
     # mi,ma = np.percentile(img, [5,95])
     img = (img-mi)/(ma-mi)
     img = np.clip(img, 0, 1)
@@ -255,6 +256,7 @@ def predict_trainvali(net, trainable, savepath=None):
     io.imsave(savepath / 'pred_vali_{:d}.png'.format(i), res2)
 
   doit(1)
+  return {'train':pred_xs_train, 'vali':pred_xs_vali}
   
 def predict(net,img,xsem,ysem):
   container = np.zeros(img.shape[:-1] + (ysem['n_channels'],))
@@ -268,7 +270,7 @@ def predict(net,img,xsem,ysem):
   patches = patchmaker.patchtool({'img':container.shape[:-1], 'patch':patchshape_padded, 'borders':borders})
   img = np.pad(img, padding, mode='constant')
 
-  s2 = patches['slice_patch']
+  # s2 = patches['slice_patch']
   for i in range(len(patches['slices_padded'])):
     s1 = patches['slices_padded'][i]
     s3 = patches['slices_valid'][i]
@@ -292,6 +294,11 @@ We could deal with this in the normal way?
 
 Full pimg predictions in predict are wack despite net training to 0.222 vali. What's wrong?
 
+- [x] fixed channel independent norm in trainvali show funcs.
+
+## Thu Jul 26 11:53:10 2018
+
+Fixed normalization bug resulting in all-blue background predictions.
 
 """
 
