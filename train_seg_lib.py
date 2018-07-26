@@ -1,4 +1,4 @@
-from segtools.defaults.ipython import *
+from segtools.defaults.ipython_remote import *
 from segtools.defaults.training import *
 
 from contextlib import redirect_stdout
