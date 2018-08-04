@@ -8,7 +8,7 @@ import pandas as pd
 from scipy.ndimage.filters import maximum_filter
 from scipy.ndimage.morphology import generate_binary_structure, binary_erosion
 
-
+ss = scores_dense
 
 ## utility functions (called internally)
 
@@ -111,7 +111,7 @@ def segparams():
   res['params'] = segmentation_params
   res['space'] = segmentation_space
   res['info'] = segmentation_info
-  res['n_evals'] = 40 ## must be greater than 2 or hyperopt throws errors
+  res['n_evals'] = 10 ## must be greater than 2 or hyperopt throws errors
   res['blur'] = False
   return res
 
@@ -295,14 +295,14 @@ def plot_history(history, savepath=None):
 
 def optimize_segmentation(pimg, rawdata, segparams, mypath_opt):
   lab  = rawdata['lab']
-  inds = rawdata['inds_labeled_slices'][:,:-4]
+  inds = rawdata['inds_labeled_slices']
   ## recompute gt_slices! don't use gt_slices from rawdata
-  gt_slices = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  gt_slices = rawdata['gt_slices']
   stack_segmentation_function = segparams['function']
   segmentation_space = segparams['space']
   segmentation_info = segparams['info']
   n_evals = segparams['n_evals']
-  img_instseg = pimg[[0]]
+  img_instseg = pimg #[[0]]
 
   ## optimization params
   # mypath_opt = add_numbered_directory(savepath, 'opt')
@@ -428,8 +428,9 @@ def compute_seg_on_slices(hyp, rawdata):
   inds_labeled_slices = rawdata['inds_labeled_slices']
   lab = rawdata['lab']
   img = rawdata['img']
-  inds = inds_labeled_slices[:,:-4] # use full
-  gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  inds = rawdata['inds_labeled_slices'] #[:,:-4] # use full
+  gt_slices = rawdata['gt_slices']
+  # gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
   pre_slices = hyp[inds[0], inds[1]]
   seg_scores = np.array([ss.seg(x,y) for x,y in zip(gt_slices, pre_slices)])
   # print({'seg': seg_scores.mean(), 'std':seg_scores.std()}, file=open(savepath / 'SEG.txt','w'))
@@ -441,9 +442,9 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
   inds = rawdata['inds_labeled_slices']
   lab = rawdata['lab']
   img = rawdata['img']
-  ch_nuc_img = channel_semantics()['nuc']
-
-  np.save(savepath / 'hyp', hyp)
+  gt_slices = rawdata['gt_slices']
+  imgsem = rawdata['imgsem']
+  ch_nuc_img = imgsem['nuc']
 
   print("COMPARE SEGMENTATION AGAINST LABELED SLICES")
   seg_scores = compute_seg_on_slices(hyp, rawdata)
@@ -451,7 +452,7 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
   
   print("CREATE DISPLAY GRID OF SEGMENTATION RESULTS")
   img_slices = img[inds[0], inds[1]]
-  gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  # gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
   pre_slices = hyp[inds[0], inds[1]]
   # container = np.zeros((1600,1600,3))
   # slices = patchmaker.slices_heterostride((1600,1600),(400,400))
@@ -469,7 +470,7 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
     psg = ss.pixel_sharing_bipartite(im3, im2)
     matching = ss.matching_iou(psg, fraction=0.5)
     ax = plotting.make_comparison_image(im1,im2,im3,matching,ax=ax)
-    ipdb.set_trace()
+    # ipdb.set_trace()
     # container[slices[i]] = ax
     # res.append(ax.get_array())
     ax.set_axis_off()
@@ -482,7 +483,7 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
 def build_nhl(hyp, rawdata, savepath):
   print("GENERATE NHLS FROM HYP AND ANALYZE")
   img = rawdata['img']
-  ch_nuc_img = channel_semantics()['nuc']
+  ch_nuc_img = imgsem['nuc']
   nhls = nhl_tools.labs2nhls(hyp, img[:,:,ch_nuc_img])
   pickle.dump(nhls, open(savepath / 'nhls.pkl', 'wb'))
 
