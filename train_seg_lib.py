@@ -117,6 +117,58 @@ def segparams():
 
 ## utils n stuff
 
+
+def copy_split(xsysws):
+  xs = xsysws['xs']
+  ys = xsysws['ys']
+  ws = xsysws['ws']
+
+  xs_train = xs.copy()
+  ys_train = ys.copy()
+  ws_train = ws.copy()
+  xs_vali  = xs.copy()
+  ys_vali  = ys.copy()
+  ws_vali  = ws.copy()
+
+  res = dict()
+  res['xs_train'] = xs_train
+  res['xs_vali'] = xs_vali
+  res['ys_train'] = ys_train
+  res['ys_vali'] = ys_vali
+  res['ws_train'] = ws_train
+  res['ws_vali'] = ws_vali
+
+  return res
+
+def copy_split_mask_vali(xsysws):
+  xs = xsysws['xs']
+  ys = xsysws['ys']
+  ws = xsysws['ws']
+  tm = xsysws['tm']
+  vm = xsysws['vm']
+
+  xs_train = xs.copy()
+  ys_train = ys.copy()
+  ws_train = ws.copy()
+  xs_vali  = xs.copy()
+  ys_vali  = ys.copy()
+  ws_vali  = ws.copy()
+
+  ws_train[vm] = 0
+  ws_vali[tm] = 0
+  ys_train = np.concatenate([ys_train, ws_train[...,np.newaxis]], -1)
+  ys_vali  = np.concatenate([ys_vali, ws_vali[...,np.newaxis]], -1)
+
+  res = dict()
+  res['xs_train'] = xs_train
+  res['xs_vali'] = xs_vali
+  res['ys_train'] = ys_train
+  res['ys_vali'] = ys_vali
+  res['ws_train'] = ws_train
+  res['ws_vali'] = ws_vali
+
+  return res
+
 def shuffle_split(xsysws):
   xs = xsysws['xs']
   ys = xsysws['ys']
@@ -180,7 +232,11 @@ def train(net, trainable, savepath, n_epochs=10, batchsize=3):
   checkpointer = ModelCheckpoint(filepath=weightname, verbose=0, save_best_only=True, save_weights_only=True)
   earlystopper = EarlyStopping(patience=30, verbose=0)
   reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
-  callbacks = [checkpointer, earlystopper, reduce_lr]
+  callbacks = [
+               checkpointer,
+               # earlystopper,
+               # reduce_lr,
+               ]
 
   # f_trainaug = lambda x,y:random_augmentation_xy(x,y,train=True)
   f_trainaug = lambda x,y:(x,y)

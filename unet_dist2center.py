@@ -28,8 +28,8 @@ def build_rawdata(homedir):
   wid = 60
   def f(x): return np.exp(-(x*x).sum()/(2*sig**2))
   kern = math_utils.build_kernel_nd(wid,3,f)
-  kern = kern[::4] ## anisotropic kernel matches img
-  
+  kern = kern[::3] ## anisotropic kernel matches img
+  kern = kern / kern.sum()
 
   if True:
     cen[list(points.T)] = 1
@@ -74,9 +74,9 @@ def build_trainable(rawdata):
   weight_stack = compute_weights(rawdata)
 
   ## add extra cell center channel
-  patchsize = (52,100,100)
-  borders = (10,10,10)
-  res = patch.patchtool({'sh_img':cellcenters.shape, 'sh_patch':patchsize, 'sh_borders':borders}) #'overlap_factor':(2,1,1)})
+  patchsize = (40,104,104)
+  borders = (0,0,0)
+  res = patch.patchtool({'img':cellcenters.shape, 'patch':patchsize, 'borders':borders}) #'overlap_factor':(2,1,1)})
   slices = res['slices_padded']
   xsem['patchsize'] = patchsize
   xsem['borders'] = borders
@@ -108,11 +108,15 @@ def build_trainable(rawdata):
 
 def build_net(xsem, ysem):
   unet_params = {
-    'n_pool' : 2,
+    'n_pool' : 3,
     'n_convolutions_first_layer' : 16,
     'dropout_fraction' : 0.2,
     'kern_width' : 5,
   }
+
+  mul = 2**unet_params['n_pool']
+  faclist = [factors(x) for x in xsem['patchsize'][1:-1]]
+  for fac in faclist: assert mul in fac
 
   input0 = Input(xsem['shape'])
   unet_out = unet.get_unet_n_pool(input0, **unet_params)
@@ -120,7 +124,7 @@ def build_net(xsem, ysem):
 
   net = Model(inputs=input0, outputs=output2)
 
-  optim = Adam(lr=1e-4)
+  optim = Adam(lr=2e-5)
   # loss  = unet.my_categorical_crossentropy(classweights=classweights, itd=0)
   # loss = unet.weighted_categorical_crossentropy(classweights=classweights, itd=0)
   # ys_train = np.concatenate([ys_train, ws_train[...,np.newaxis]], -1)
@@ -143,7 +147,7 @@ def show_trainvali(trainable, savepath):
   xsem = trainable['xsem']
   ysem = trainable['ysem']
   xrgb = [xsem['mem'], xsem['nuc'], xsem['nuc']]
-  yrgb = [ysem['mem'], ysem['nuc'], ysem['bg']]
+  yrgb = [ysem['gauss'], ysem['gauss'], ysem['gauss']]
 
   def norm(img):
     # img = img / img.mean() / 5
@@ -162,11 +166,11 @@ def show_trainvali(trainable, savepath):
     return res
 
   def mid(arr,i):
-    # ss = [slice(None) for _ in arr.shape]
-    # ss[i] = arr.shape[i]//2
+    ss = [slice(None) for _ in arr.shape]
+    n = arr.shape[i]
+    ss[i] = slice(n//3,(2*n)//3)
     # return arr[ss]
-    return arr.max(i)
-
+    return arr[ss].max(i)
 
   def doit(i):
     res = plot(mid(xs_train,i), mid(ys_train,i))
@@ -178,7 +182,7 @@ def show_trainvali(trainable, savepath):
   doit(2) # y
   doit(3) # x
 
-def predict_trainvali(net, trainable, savepath=None):
+def predict_trainvali_1(net, trainable, savepath=None):
   xs_train = trainable['xs_train']
   xs_vali  = trainable['xs_vali']
   ys_train = trainable['ys_train']
@@ -229,7 +233,7 @@ def predict_trainvali(net, trainable, savepath=None):
   doit(2) # y
   doit(3) # x
 
-def predict_trainvali_1(net, trainable, savepath=None):
+def predict_trainvali(net, trainable, savepath=None):
   xs_train = trainable['xs_train']
   xs_vali = trainable['xs_vali']
   ys_train = trainable['ys_train']
@@ -285,14 +289,14 @@ def predict_trainvali_1(net, trainable, savepath=None):
   return res1, res2
 
 def predict(net, img, xsem, ysem):
+  "img must have axes: TZYXC and xyz voxels of (.2,.2,.5)um"
   container = np.zeros(img.shape[:-1] + (ysem['n_channels'],))
   cat = np.concatenate
-
   
   borders = np.array((0,20,20,20))
   patchshape = np.array([1,64,200,200]) + 2*borders
-  assert np.all([4 in factors(n) for n in patchshape[1:]]) ## unet shape requirements
-  res = patch.patchtool({'sh_img':img.shape[:-1], 'sh_patch':patchshape, 'sh_borders':borders})
+  # assert np.all([4 in factors(n) for n in patchshape[1:]]) ## unet shape requirements
+  res = patch.patchtool({'img':img.shape[:-1], 'patch':patchshape, 'borders':borders})
   padding = np.array([borders, borders]).T
   img = np.pad(img, cat([padding,[[0,0]]],0), mode='constant')
   s2  = res['slice_patch']
@@ -573,6 +577,23 @@ It could just be whatever the maximum real distance is between points...
 
 Easy! Just use the linear sum assignment function from scipy.optimize. This uses the hungarian matching 
 (munkres) algorithm to do a 
+
+## Mon Aug 13 12:41:32 2018
+
+Another way to train a model to consistently predict cell centers might be to change the target 
+with each epoch. Instead of making the kernel smaller, we keep the kernel small, but we use a 
+weighted linear combination of the input nuc channel and the centerpoint kernel, but change the 
+weighting towards the kernel over time.
+
+## Wed Aug 15 17:10:37 2018
+
+OK by changing the learning rate and building reasonable looking kernels I get get it to learn
+a reasonable looking centerpoint. The question is now how to maximize this.
+But there is a problem I overlooked before. We could be overfitting by re-generating the
+trainable each time, because we don't keep the same data as validation. We essentially fit 
+wrt the whole image. But predicting on the remaining images is still a good test set.
+
+
 
 LIT:
 [1] 2018, 67, Microscopy cell counting and detection with fully convolutional regression networks

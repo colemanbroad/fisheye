@@ -9,7 +9,7 @@ import pandas as pd
 
 from contextlib import redirect_stdout
 import train_seg_lib as ts
-
+from sklearn.metrics import confusion_matrix
 
 def lab2instance(x, d):
   x[x!=d['nuc']] = 0
@@ -30,7 +30,7 @@ def build_rawdata(homedir):
   ## load data
   # img = imread(str(homedir / 'data/img006.tif'))
   img = np.load(str(homedir / 'data/img006_noconv.npy'))
-  img = perm(img,"TZCYX", "TZYXC")
+  img = perm(img, "TZCYX", "TZYXC")
   imgsem = {'axes':"TZYXC", 'nuc':0, 'mem':1, 'n_channels':2}
 
   # img = np.load(str(homedir / 'isonet/restored.npy'))
@@ -95,19 +95,25 @@ def build_trainable(rawdata):
   lab = rawdata['lab']
   labsem = rawdata['labsem']
 
-
-
-  xsem = {'n_channels':2, 'mem':0, 'nuc':1, 'shape':(None,None,None,2)}
-  ysem = {'n_channels':3, 'nuc':1, 'mem':0, 'bg':2, 'weight_channel_ytrue':True, 
-          'shape':(None,None,None,3), 'classweights':[1/3]*3,}
+  xsem = {'n_channels':2, 'mem':0, 'nuc':1, 
+          'shape':(None,None,None,2),
+          }
+  ysem = {'n_channels':3, 'mem':0, 'nuc':1, 'bg':2,
+          'shape' : (None,None,None,3),
+          'classweights' : [1/3]*3,
+          'weight_channel_ytrue' : True,
+          }
 
   weight_stack = compute_weights(rawdata)
+  train_mask = np.random.rand(*lab.shape) > 1/6
+  vali_mask = ~train_mask ## need to copy data because of zero padding later
 
   ## build slices
-  patchsize = (1,64,128,128)
+  patchsize = (1,32,104,104)
   xsem['patchsize'] = patchsize
 
-  borders = (0,12,12,12)
+  bw = 0
+  borders = (0,bw,bw,bw)
   res = patchmaker.patchtool({'img':img.shape[:-1], 'patch':patchsize, 'overlap_factor':(1,1,1,1), 'borders':borders})
   slices = res['slices_padded']
   xsem['patchsize'] = patchsize
@@ -120,25 +126,23 @@ def build_trainable(rawdata):
     img = np.pad(img, padding, 'constant')
     lab = np.pad(lab, padding[:-1], 'constant', constant_values=labsem['bg'])
     weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
+    train_mask = np.pad(train_mask, padding[:-1], 'constant')
+    vali_mask = np.pad(vali_mask, padding[:-1], 'constant')
 
   ## extract slices and build xs,ys,ws
-  slices_filtered = [s for s in slices if (lab[s][0,12:-12]<2).sum() > 0] ## filter out all slices without much training data
-  slices_filtered = slices_filtered[:20]
+  slices_filtered = [s for s in slices if (lab[s][0,:]<2).sum() > 0] ## filter out all slices without much training data
   xs = np.array([img[ss][0] for ss in slices_filtered])
   ys = np.array([lab[ss][0] for ss in slices_filtered])
-  ws = np.array([weight_stack[ss][0] for ss in slices_filtered])
   ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
+  ws = np.array([weight_stack[ss][0] for ss in slices_filtered])
+  tm = np.array([train_mask[ss][0] for ss in slices_filtered])
+  vm = np.array([vali_mask[ss][0] for ss in slices_filtered])
+  print(xs.shape, ys.shape, ws.shape)
 
   ## normalize over space. sample and channel independent
   xs = xs/np.mean(xs,(1,2,3), keepdims=True)
 
-  if ysem['weight_channel_ytrue']:
-    ys = np.concatenate([ys, ws[...,np.newaxis]], -1)
-
-  
-  print(xs.shape, ys.shape, ws.shape)
-
-  res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws})
+  res = ts.copy_split_mask_vali({'xs':xs,'ys':ys,'ws':ws,'tm':tm,'vm':vm})
   res['xsem'] = xsem
   res['ysem'] = ysem
   res['slices'] = slices
@@ -170,6 +174,16 @@ def build_net(xsem, ysem):
   if ysem['weight_channel_ytrue'] == True:
     loss = unet.weighted_categorical_crossentropy()
     def met0(y_true, y_pred):
+      # y has axes "SZYXC"
+      # yt = y_true[...,:-1]
+      # ws = y_true[...,-1] > 0
+      # print(ws.dtype)
+      # # ss = np.s_[::2,::2,::2,::2] ## speed things up
+      # print(ws.shape, y_pred.shape, yt.shape)
+      # predlab = np.argmax(y_pred, axis=-1)[ws]
+      # truelab = np.argmax(yt, axis=-1)[ws]
+      # return confusion_matrix(truelab.flat, predlab.flat)
+      # return (predlab==truelab).sum() / predlab.size
       return metrics.categorical_accuracy(y_true[...,:-1], y_pred)
   else:
     loss = unet.my_categorical_crossentropy()
@@ -445,8 +459,6 @@ def show_results2(pimg, rawdata, trainable, savepath=None):
   doit(2) # y
   doit(3) # x
 
-
-
 def find_divisions(pimg, ysem, savepath=None):
   ch_div = ysem['div']
   rgbdiv = [ysem['div'], ysem['nuc'], ysem['bg']]
@@ -517,5 +529,29 @@ With per-slice models we can have adjacent planes which are split: 1 in train, 1
 Naturally, because SPIM images have strong spatial variations both in image quality, microscope model and content we expect labels to be strongly locally correlated.
 AND the input is strongly spatially correlated.
 AND the transformation mapping in->out is strongly locally correlated! (appreciate that is a separate point.)
+
+I don't think that the 3D unet is the same as the z-in-channels architecture.
+The receptive field from the z-in-channels architecture is only exactly as big as zdim.
+But in the real 3D conv model the low level features are very local in space, but later in the network 
+the features draw on information from a much wider area.
+If we put z-in-channels we get effectively a very wide convolution in the first layer, but then no 
+convolution after that because the receptive field doesn't grow at all after the first layer.
+It just the same features/channels being remixed and remixed.
+However the receptive field does grow in x/y as we go deeper.
+The effective receptive field in true spatial dimensions is very well defined in z, but less well
+defined in x/y, because it's much easier for the net to nearby info, even though it's possible to use far away info.
+The effective receptive field might even depend on the data and training!
+It must be measured empirically, just like the max patch size before exceeding GPU memory.
+
+## Mon Aug  6 18:37:16 2018
+
+https://stackoverflow.com/questions/33736795/tensorflow-numpy-like-tensor-indexing
+numpy style indexing in tensorflow would make cusom metrics easier to create.
+
+If I dont' add borders there are only 8 patches available in the 3D unet with 40x104x104 size.
+This means only one patch for validation.
+This is annoying.
+
+
 
 """

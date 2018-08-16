@@ -102,6 +102,8 @@ def build_trainable(rawdata):
           'shape':(None,None,None,3), 'classweights':[1/3]*3,}
 
   weight_stack = compute_weights(rawdata)
+  train_mask = np.random.rand(*lab.shape) > 1/6
+  vali_mask = ~train_mask ## need to copy data because of zero padding later
 
   ## build slices
   patchsize = (1,nzdim,200,200)
@@ -123,8 +125,10 @@ def build_trainable(rawdata):
   # slices_filtered = slices_filtered[:20]
   xs = np.array([img[ss][0] for ss in slices_filtered])
   ys = np.array([lab[ss][0] for ss in slices_filtered])
-  ws = np.array([weight_stack[ss][0] for ss in slices_filtered])
   ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
+  ws = np.array([weight_stack[ss][0] for ss in slices_filtered])
+  tm = np.array([train_mask[ss][0] for ss in slices_filtered])
+  vm = np.array([vali_mask[ss][0] for ss in slices_filtered])
 
   ## normalize over space. sample and channel independent
   xs = xs/np.mean(xs,(1,2,3), keepdims=True)
@@ -133,13 +137,16 @@ def build_trainable(rawdata):
   xs = collapse2(xs, 'szyxc','s,y,x,zc') ## szyxc
   ys = ys[:,xsem['dz']] ## szyxc
   ws = ws[:,xsem['dz']] ## szyx
+  tm = tm[:,xsem['dz']] ## szyx
+  vm = vm[:,xsem['dz']] ## szyx
 
-  if ysem['weight_channel_ytrue']:
-    ys = np.concatenate([ys, ws[...,np.newaxis]], -1)
+  # if ysem['weight_channel_ytrue']:
+  #   ys = np.concatenate([ys, ws[...,np.newaxis]], -1)
   
   print(xs.shape, ys.shape, ws.shape)
 
-  res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws})
+  res = ts.copy_split_mask_vali({'xs':xs,'ys':ys,'ws':ws,'tm':tm,'vm':vm})
+  # res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws})
   res['xsem'] = xsem
   res['ysem'] = ysem
   res['slices'] = slices
