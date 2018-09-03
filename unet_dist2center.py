@@ -15,25 +15,28 @@ patch = patchmaker
 
 def build_rawdata(homedir):
   img = np.load(str(homedir / 'data/img006_noconv.npy'))
-  img = perm(img,"TZCYX", "TZYXC")
+  img = img[1]
+  img = perm(img,"ZCYX", "ZYXC")
+  img = norm_szyxc_per(img,(0,1,2))
 
-  r = 2 ## xy downsampling factor
-  imgsem = {'axes':"TZYXC", 'nuc':0, 'mem':1, 'n_channels':2, 'r':r} ## image semantics
+  r = 1 ## xy downsampling factor
+  imgsem = {'axes':"ZYXC", 'nuc':0, 'mem':1, 'n_channels':2, 'r':r} ## image semantics
 
   # build point-detection gt
   points = lib.mkpoints()
-  cen = np.zeros(img.shape[1:-1])
+  cen = np.zeros(img.shape[:-1])
 
-  sig = 10
-  wid = 60
-  def f(x): return np.exp(-(x*x).sum()/(2*sig**2))
+  sig = np.array([.25,.1,.05])*0.7
+  wid = 100
+  def f(x): return np.exp(-(sig*x*sig*x).sum()/2)
   kern = math_utils.build_kernel_nd(wid,3,f)
-  kern = kern[::3] ## anisotropic kernel matches img
+  # kern = kern[::1] ## anisotropic kernel matches img
   kern = kern / kern.sum()
 
   if True:
     cen[list(points.T)] = 1
     cen2 = fftconvolve(cen, kern, mode='same')
+
   
   if False:
     A = np.newaxis
@@ -51,22 +54,22 @@ def build_rawdata(homedir):
 
   # ipdb.set_trace()
   res = dict()
-  res['img'] = img[:,:,::r,::r]
+  res['img'] = img[:,::r,::r]
   res['imgsem'] = imgsem
-  res['kern'] = kern
+  res['kern'] = kern[:,::r,::r]
+  res['cen'] = cen
   res['cellcenters'] = cen2[:,::r,::r]
   return res
 
 def compute_weights(rawdata):
   img = rawdata['img']
-  weight_stack = np.ones(img.shape[1:-1])
+  weight_stack = np.ones(img.shape[:-1])
   return weight_stack
 
 def build_trainable(rawdata):
   img = rawdata['img']
   imgsem = rawdata['imgsem']
   cellcenters = rawdata['cellcenters']
-  imgdat = img[1]
 
   xsem = {'n_channels':imgsem['n_channels'], 'mem':0, 'nuc':1, 'shape':(None, None, None, imgsem['n_channels'])}
   ysem = {'n_channels':1, 'gauss':0, 'rgb':[0,0,0], 'shape':(None, None, None, 1)}
@@ -74,7 +77,7 @@ def build_trainable(rawdata):
   weight_stack = compute_weights(rawdata)
 
   ## add extra cell center channel
-  patchsize = (40,104,104)
+  patchsize = 8*(np.array([1,2.5,2.5])*5).astype(np.int)
   borders = (0,0,0)
   res = patch.patchtool({'img':cellcenters.shape, 'patch':patchsize, 'borders':borders}) #'overlap_factor':(2,1,1)})
   slices = res['slices_padded']
@@ -84,12 +87,12 @@ def build_trainable(rawdata):
   ## pad images
   cat = np.concatenate
   padding = np.array([borders, borders]).T
-  imgdat = np.pad(imgdat, cat([padding, [[0,0]] ], 0), mode='constant')
+  img = np.pad(img, cat([padding, [[0,0]] ], 0), mode='constant')
   cellcenters  = np.pad(cellcenters, padding, mode='constant')
   weight_stack = np.pad(weight_stack, padding, mode='constant')
 
   ## extract slices
-  xs = np.array([imgdat[ss] for ss in slices])
+  xs = np.array([img[ss] for ss in slices])
   ys = np.array([cellcenters[ss] for ss in slices])
   ws = np.array([weight_stack[ss] for ss in slices])
   ## add channels to target
@@ -100,7 +103,7 @@ def build_trainable(rawdata):
   
   print(xs.shape, ys.shape, ws.shape)
 
-  res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws})
+  res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws,'slices':slices})
   res['xsem'] = xsem
   res['ysem'] = ysem
   res['slices'] = slices
@@ -109,9 +112,9 @@ def build_trainable(rawdata):
 def build_net(xsem, ysem):
   unet_params = {
     'n_pool' : 3,
-    'n_convolutions_first_layer' : 16,
+    'n_convolutions_first_layer' : 32,
     'dropout_fraction' : 0.2,
-    'kern_width' : 5,
+    'kern_width' : 3,
   }
 
   mul = 2**unet_params['n_pool']
@@ -134,159 +137,54 @@ def build_net(xsem, ysem):
     # return ma-mi
     return K.std(y_pred)
   
-  net.compile(optimizer=optim, loss={'B':losses.mean_absolute_error}, metrics={'B':met0}) # metrics=['accuracy'])
+  def loss(y_true, y_pred):
+    return losses.mean_squared_error(y_true,y_pred) + 10.0 * (K.mean(y_true) - K.mean(y_pred))**2
+
+  net.compile(optimizer=optim, loss={'B':loss}, metrics={'B':met0})
   return net
 
+def norm_szyxc(img,axs=(1,2,3)):
+  mi,ma = img.min(axs,keepdims=True), img.max(axs,keepdims=True)
+  img = (img-mi)/(ma-mi)
+  return img
+
+def norm_szyxc_per(img,axs=(1,2,3)):
+  mi,ma = np.percentile(img,[2,99],axis=axs,keepdims=True)
+  img = (img-mi)/(ma-mi)
+  img = img.clip(0,1)
+  return img
+
+def midplane(arr,i):
+  ss = [slice(None) for _ in arr.shape]
+  n = arr.shape[i]
+  ss[i] = slice(n//3, (2*n)//3)
+  return arr[ss].max(i)
+
+def plotlist(lst,i):
+  "takes a list of form [arr1, arr2, ...] and "
+  lst2 = [norm_szyxc_per(midplane(data,i)) for data in lst]
+  lst2[0][...,2] = 0 # remove blue from xs
+  res = ts.plotgrid(lst2)
+  return res
+
 def show_trainvali(trainable, savepath):
-  xs_train = trainable['xs_train']
-  xs_vali  = trainable['xs_vali']
-  ys_train = trainable['ys_train']
-  ys_vali  = trainable['ys_vali']
-  ws_train = trainable['ws_train']
-  ws_vali  = trainable['ws_vali']
   xsem = trainable['xsem']
   ysem = trainable['ysem']
   xrgb = [xsem['mem'], xsem['nuc'], xsem['nuc']]
   yrgb = [ysem['gauss'], ysem['gauss'], ysem['gauss']]
+  visuals = {'xrgb':xrgb, 'yrgb':yrgb, 'plotlist':plotlist}
+  ts.show_trainvali(trainable, visuals, savepath)
 
-  def norm(img):
-    # img = img / img.mean() / 5
-    mi,ma = img.min(), img.max()
-    # mi,ma = np.percentile(img, [5,95])
-    img = (img-mi)/(ma-mi)
-    img = np.clip(img, 0, 1)
-    return img
-
-  def plot(xs, ys):
-    xs = norm(xs[...,xrgb])
-    ys = norm(ys[...,yrgb])
-    xs[...,2] = 0
-    res = np.stack([xs,ys],0)
-    res = collapse2(res, 'isyxc','sy,ix,c')
-    return res
-
-  def mid(arr,i):
-    ss = [slice(None) for _ in arr.shape]
-    n = arr.shape[i]
-    ss[i] = slice(n//3,(2*n)//3)
-    # return arr[ss]
-    return arr[ss].max(i)
-
-  def doit(i):
-    res = plot(mid(xs_train,i), mid(ys_train,i))
-    io.imsave(savepath / 'dat_train_{:d}.png'.format(i), res)
-    res = plot(mid(xs_vali,i), mid(ys_vali,i))
-    io.imsave(savepath / 'dat_vali_{:d}.png'.format(i), res)
-
-  doit(1) # z
-  doit(2) # y
-  doit(3) # x
-
-def predict_trainvali_1(net, trainable, savepath=None):
-  xs_train = trainable['xs_train']
-  xs_vali  = trainable['xs_vali']
-  ys_train = trainable['ys_train']
-  ys_vali  = trainable['ys_vali']
-  ws_train = trainable['ws_train']
-  ws_vali  = trainable['ws_vali']
+def predict_trainvali(net, trainable, savepath):
   xsem = trainable['xsem']
   ysem = trainable['ysem']
   xrgb = [xsem['mem'], xsem['nuc'], xsem['nuc']]
-  yrgb = [ysem['mem'], ysem['nuc'], ysem['bg']]
+  yrgb = [ysem['gauss'], ysem['gauss'], ysem['gauss']]
+  visuals = {'xrgb':xrgb, 'yrgb':yrgb, 'plotlist':plotlist}
+  ts.predict_trainvali(net, trainable, visuals, savepath)
 
-  pred_xs_train = net.predict(xs_train, batch_size=1)
-  pred_xs_vali = net.predict(xs_vali, batch_size=1)
 
-  def norm(img):
-    # img = img / img.mean() / 5
-    mi,ma = img.min(), img.max()
-    # mi,ma = np.percentile(img, [5,95])
-    img = (img-mi)/(ma-mi)
-    img = np.clip(img, 0, 1)
-    return img
 
-  def plot(xs, ys, preds):
-    xs = norm(xs[...,xrgb])
-    ys = norm(ys[...,yrgb])
-    preds = norm(preds[...,yrgb])
-    xs[...,2] = 0
-    res = np.stack([xs,ys,preds],0)
-    res = collapse2(res, 'isyxc','sy,ix,c')
-    return res
-
-  def mid(arr,i):
-    # ss = [slice(None) for _ in arr.shape]
-    # ss[i] = arr.shape[i]//2
-    # return arr[ss]
-    return arr.max(i)
-
-  def doit(i):
-    res1 = plot(mid(xs_train,i), mid(ys_train,i), mid(pred_xs_train,i))
-    res2 = plot(mid(xs_vali,i), mid(ys_vali,i), mid(pred_xs_vali,i))
-    if i in {2,3}:
-      res1 = zoom(res1, (5,1,1), order=1)
-      res2 = zoom(res2, (5,1,1), order=1)
-    io.imsave(savepath / 'pred_train_{:d}.png'.format(i), res1)
-    io.imsave(savepath / 'pred_vali_{:d}.png'.format(i), res2)
-
-  doit(1) # z
-  doit(2) # y
-  doit(3) # x
-
-def predict_trainvali(net, trainable, savepath=None):
-  xs_train = trainable['xs_train']
-  xs_vali = trainable['xs_vali']
-  ys_train = trainable['ys_train']
-  ys_vali = trainable['ys_vali']
-  xsem = trainable['xsem']
-  ysem = trainable['ysem']
-
-  rgb_ys = [ysem['gauss']]*3 
-  rgb_xs = [xsem['mem'], xsem['nuc'],xsem['nuc']]
-  
-  pred_xs_train = net.predict(xs_train, batch_size=1)
-  pred_xs_vali = net.predict(xs_vali, batch_size=1)
-
-  xs_train = xs_train.max(1)
-  xs_vali = xs_vali.max(1)
-  pred_xs_train = pred_xs_train.max(1)
-  pred_xs_vali = pred_xs_vali.max(1)
-  ys_train = ys_train.max(1)
-  ys_vali = ys_vali.max(1)
-
-  def norm(img):
-    # img = img / img.mean() / 5
-    mi,ma = img.min(), img.max()
-    # mi,ma = np.percentile(img, [5,95])
-    img = (img-mi)/(ma-mi)
-    img = np.clip(img, 0, 1)
-    return img
-
-  def plot(xs,pred,ys,rows,cols):
-    x = xs[:rows*cols,...,rgb_xs]
-    y = pred[:rows*cols,...,rgb_ys]
-    z = ys[:rows*cols,...,rgb_ys]
-    x = norm(x)
-    y = norm(y)
-    z = norm(z)
-    xy = np.stack([x,z,y],0)
-    res = collapse2(splt(xy,cols,1), 'iCRyxc', 'Ry,Cix,c')
-    return res
-
-  n = xs_train.shape[0]
-  cols = min(8, n)
-  rows = floor(n/cols)
-  res1 = plot(xs_train, pred_xs_train, ys_train, rows, cols)
-
-  n = xs_vali.shape[0]
-  cols = min(8, n)
-  rows = floor(n/cols)
-  res2 = plot(xs_vali, pred_xs_vali, ys_vali, rows, cols)
-
-  if savepath: io.imsave(savepath / 'pred_xs_train.png', norm(res1))
-  if savepath: io.imsave(savepath / 'pred_xs_vali.png', norm(res2))
-
-  return res1, res2
 
 def predict(net, img, xsem, ysem):
   "img must have axes: TZYXC and xyz voxels of (.2,.2,.5)um"
@@ -590,8 +488,26 @@ weighting towards the kernel over time.
 OK by changing the learning rate and building reasonable looking kernels I get get it to learn
 a reasonable looking centerpoint. The question is now how to maximize this.
 But there is a problem I overlooked before. We could be overfitting by re-generating the
-trainable each time, because we don't keep the same data as validation. We essentially fit 
+trainable each time, because we don't keep the same data as validation! We essentially fit 
 wrt the whole image. But predicting on the remaining images is still a good test set.
+
+## Wed Aug 22 11:36:07 2018
+
+simplify grid plotting.
+2d and 3d.
+
+- models decide how to do rgb and normalization
+- default normalization could be min/max to 0/1
+- models decide how to remove z
+- model does prediction if necessary
+- model knows if xy,yz,xz ? or just one ? and upsampling factor.
+- lib gets list of arrays of same shape and axes = "SYXC"
+  lib combines them, moves them into grid and saves them to savedir
+  lib knows how to name them?
+
+Added isotropic gaussians with arbitrary width and the model fails to train at all.
+Everything immediately goes to black.
+
 
 
 

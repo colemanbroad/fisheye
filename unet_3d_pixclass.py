@@ -10,6 +10,9 @@ import pandas as pd
 from contextlib import redirect_stdout
 import train_seg_lib as ts
 from sklearn.metrics import confusion_matrix
+from segtools import label_tools
+import skimage.morphology as morph
+import gputools
 
 def lab2instance(x, d):
   x[x!=d['nuc']] = 0
@@ -57,6 +60,62 @@ def build_rawdata(homedir):
 
   return res
 
+def build_rawdata2(homedir):
+  homedir = Path(homedir)
+  ## load data
+  # img = imread(str(homedir / 'data/img006.tif'))
+  img = np.load(str(homedir / 'data/img006_noconv.npy'))
+  img = img[1]
+  img = perm(img, "ZCYX", "ZYXC")
+  img = norm_szyxc_per(img,(0,1,2))
+
+  imgsem = {'axes':"ZYXC", 'nuc':1, 'mem':0, 'n_channels':2}
+
+  points = lib.mkpoints()
+  cen = np.zeros(img.shape[:-1])
+  cen[list(points.T)] = 1
+  x = img[...,1]
+  hx = np.array([1,1,1]) / 3
+  x = gputools.convolve_sep3(x, hx, hx, hx)
+  lab = watershed(-x, label(cen)[0], mask=x>x.mean())
+
+  bor = label_tools.find_boundaries(lab)
+  bor = np.array([morph.binary_dilation(b) for b in bor]) ## just x,y
+  bor = np.array([morph.binary_dilation(b) for b in bor]) ## just x,y
+  # bor = np.array([morph.binary_dilation(b) for b in bor]) ## just x,yp
+  # bor = morph.binary_erosion(bor)
+  # bor = morph.binary_dilation(bor)
+  # bor = morph.binary_erosion(bor)
+  # bor = morph.binary_dilation(bor)
+  # bor = morph.binary_dilation(bor)
+  lab[lab!=0] = 1
+  lab[bor] = 2
+  labsem = {'n_classes':3, 'nuc':1, 'mem':2, 'bg':0, 'axes':'ZYX'}
+
+  res = dict()
+  res['img'] = img
+  res['imgsem'] = imgsem
+  res['lab'] = lab
+  res['labsem'] = labsem
+  res['points'] = points
+  res['cen'] = cen
+  # res['mask_labeled_slices'] = mask_labeled_slices
+  # res['inds_labeled_slices'] = inds_labeled_slices
+  # res['gt_slices'] = gt_slices
+  return res
+
+def border_weights_full(rawdata):
+  lab = rawdata['lab']
+  labsem = rawdata['labsem']
+
+  mask = lab==labsem['mem']
+  distimg = ~mask
+  distimg = distance_transform_edt(distimg)
+  distimg = np.exp(-distimg/10)
+  distimg[mask] *= 3  ## higher class weight for membrane (similar to distance weight)
+  distimg = distimg / distimg.mean()
+  return distimg
+
 def compute_weights(rawdata):
   lab = rawdata['lab']
   labsem = rawdata['labsem']
@@ -90,6 +149,11 @@ def compute_weights(rawdata):
 
   return weight_stack
 
+def simple_weights(rawdata):
+  lab = rawdata['lab']
+  weight_stack = np.ones(lab.shape)
+  return weight_stack
+
 def build_trainable(rawdata):
   img = rawdata['img']
   lab = rawdata['lab']
@@ -98,51 +162,64 @@ def build_trainable(rawdata):
   xsem = {'n_channels':2, 'mem':0, 'nuc':1, 
           'shape':(None,None,None,2),
           }
-  ysem = {'n_channels':3, 'mem':0, 'nuc':1, 'bg':2,
+  ysem = {'n_channels':3, 'mem':2, 'nuc':1, 'bg':0,
           'shape' : (None,None,None,3),
           'classweights' : [1/3]*3,
           'weight_channel_ytrue' : True,
           }
 
-  weight_stack = compute_weights(rawdata)
+  # weight_stack = compute_weights(rawdata)
+  # weight_stack = simple_weights(rawdata)
+  weight_stack = border_weights_full(rawdata)
   train_mask = np.random.rand(*lab.shape) > 1/6
   vali_mask = ~train_mask ## need to copy data because of zero padding later
 
   ## build slices
   patchsize = (1,32,104,104)
+  patchsize = (32,104,104)
+
   xsem['patchsize'] = patchsize
 
   bw = 0
   borders = (0,bw,bw,bw)
-  res = patchmaker.patchtool({'img':img.shape[:-1], 'patch':patchsize, 'overlap_factor':(1,1,1,1), 'borders':borders})
-  slices = res['slices_padded']
+  borders = (bw,bw,bw)
+  overlap = (1,1,1,1)
+  overlap = (1,1,1)
+  patches = patchmaker.patchtool({'img':img.shape[:-1], 'patch':patchsize, 'overlap_factor':overlap, 'borders':borders})
+  slices = patches['slices_padded']
   xsem['patchsize'] = patchsize
   xsem['borders'] = borders
-  xsem['res_patches'] = res
 
   ## pad images to work with slices
-  if True:
-    padding = [(b,b) for b in borders] + [(0,0)]
-    img = np.pad(img, padding, 'constant')
-    lab = np.pad(lab, padding[:-1], 'constant', constant_values=labsem['bg'])
-    weight_stack = np.pad(weight_stack, padding[:-1], 'constant')
-    train_mask = np.pad(train_mask, padding[:-1], 'constant')
-    vali_mask = np.pad(vali_mask, padding[:-1], 'constant')
+  padding = [(b,b) for b in borders]
+  padding_chan = padding + [(0,0)]
+  img = np.pad(img, padding_chan, 'constant')
+  lab = np.pad(lab, padding, 'constant', constant_values=labsem['bg'])
+  weight_stack = np.pad(weight_stack, padding, 'constant')
+  train_mask = np.pad(train_mask, padding, 'constant')
+  vali_mask = np.pad(vali_mask, padding, 'constant')
 
   ## extract slices and build xs,ys,ws
-  slices_filtered = [s for s in slices if (lab[s][0,:]<2).sum() > 0] ## filter out all slices without much training data
-  xs = np.array([img[ss][0] for ss in slices_filtered])
-  ys = np.array([lab[ss][0] for ss in slices_filtered])
+  # slices_filtered = [s for s in slices if (lab[s][0,:]<2).sum() > 0] ## filter out all slices without much training data
+  slices_filtered = slices
+  def f(x): return x # x[0]
+  xs = np.array([f(img[ss]) for ss in slices_filtered])
+  ys = np.array([f(lab[ss]) for ss in slices_filtered])
   ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
-  ws = np.array([weight_stack[ss][0] for ss in slices_filtered])
-  tm = np.array([train_mask[ss][0] for ss in slices_filtered])
-  vm = np.array([vali_mask[ss][0] for ss in slices_filtered])
+  ws = np.array([f(weight_stack[ss]) for ss in slices_filtered])
+  tm = np.array([f(train_mask[ss]) for ss in slices_filtered])
+  vm = np.array([f(vali_mask[ss]) for ss in slices_filtered])
   print(xs.shape, ys.shape, ws.shape)
 
   ## normalize over space. sample and channel independent
-  xs = xs/np.mean(xs,(1,2,3), keepdims=True)
+  ax_zyx = (1,2,3)
+  xs = xs/np.mean(xs, ax_zyx, keepdims=True)
 
-  res = ts.copy_split_mask_vali({'xs':xs,'ys':ys,'ws':ws,'tm':tm,'vm':vm})
+  if ysem['weight_channel_ytrue']:
+    ys = np.concatenate([ys, ws[...,np.newaxis]], -1)
+
+  # res = ts.copy_split_mask_vali({'xs':xs,'ys':ys,'ws':ws,'tm':tm,'vm':vm})
+  res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws,'slices':slices})
   res['xsem'] = xsem
   res['ysem'] = ysem
   res['slices'] = slices
@@ -154,7 +231,7 @@ def build_net(xsem, ysem):
     'n_pool' : 3,
     'n_convolutions_first_layer' : 16,
     'dropout_fraction' : 0.2,
-    'kern_width' : 5,
+    'kern_width' : 3,
   }
 
   mul = 2**unet_params['n_pool']
@@ -171,7 +248,7 @@ def build_net(xsem, ysem):
 
   ss = [slice(None), slice(2,-2), slice(2,-2), slice(2,-2), slice(None)]
 
-  if ysem['weight_channel_ytrue'] == True:
+  if ysem['weight_channel_ytrue']:
     loss = unet.weighted_categorical_crossentropy()
     def met0(y_true, y_pred):
       # y has axes "SZYXC"
@@ -192,109 +269,46 @@ def build_net(xsem, ysem):
   net.compile(optimizer=optim, loss={'B':loss}, metrics={'B':met0}) # metrics=['accuracy'])
   return net
 
+def norm_szyxc(img,axs=(1,2,3)):
+  mi,ma = img.min(axs,keepdims=True), img.max(axs,keepdims=True)
+  img = (img-mi)/(ma-mi)
+  return img
+
+def norm_szyxc_per(img,axs=(1,2,3)):
+  mi,ma = np.percentile(img,[2,99],axis=axs,keepdims=True)
+  img = (img-mi)/(ma-mi)
+  img = img.clip(0,1)
+  return img
+
+def midplane(arr,i):
+  ss = [slice(None) for _ in arr.shape]
+  n = arr.shape[i]
+  ss[i] = n//2 #slice(n//3, (2*n)//3)
+  # return arr[ss].max(i)
+  return arr[ss]
+
+def plotlist(lst,i):
+  "takes a list of form [arr1, arr2, ...] and "
+  lst2 = [norm_szyxc_per(midplane(data,i)) for data in lst]
+  lst2[0][...,2] = 0 # remove blue from xs
+  res = ts.plotgrid(lst2)
+  return res
+
 def show_trainvali(trainable, savepath):
-  xs_train = trainable['xs_train']
-  xs_vali  = trainable['xs_vali']
-  ys_train = trainable['ys_train']
-  ys_vali  = trainable['ys_vali']
-  ws_train = trainable['ws_train']
-  ws_vali  = trainable['ws_vali']
   xsem = trainable['xsem']
   ysem = trainable['ysem']
   xrgb = [xsem['mem'], xsem['nuc'], xsem['nuc']]
   yrgb = [ysem['mem'], ysem['nuc'], ysem['bg']]
-
-  def norm(img):
-    # img = img / img.mean() / 5
-    axis = tuple(np.arange(len(img.shape)-1))
-    mi,ma = img.min(axis,keepdims=True), img.max(axis,keepdims=True)
-    # mi,ma = np.percentile(img, [5,95])
-    img = (img-mi)/(ma-mi)
-    img = np.clip(img, 0, 1)
-    return img
-
-  def plot(xs, ys):
-    xs = norm(xs[...,xrgb])
-    ys = norm(ys[...,yrgb])
-    xs[...,2] = 0
-    res = np.stack([xs,ys],0)
-    n_patches = res.shape[1]
-    r, c = max(1, n_patches//5), 5
-    res = splt(res[:,:r*c], r, 1)
-    res = collapse2(res, 'iRCyxc','Ry,Cix,c')
-    return res
-
-  def mid(arr,i):
-    ss = [slice(None) for _ in arr.shape]
-    ss[i] = arr.shape[i]//2
-    return arr[ss]
-
-  def doit(i):
-    res1 = plot(mid(xs_train,i), mid(ys_train,i))
-    res2 = plot(mid(xs_vali,i), mid(ys_vali,i))
-    if i in {2,3}:
-      res1 = zoom(res1, (5,1,1), order=1)
-      res2 = zoom(res2, (5,1,1), order=1)
-    io.imsave(savepath / 'dat_train_{:d}.png'.format(i), res1)
-    io.imsave(savepath / 'dat_vali_{:d}.png'.format(i), res2)
-
-  doit(1) # z
-  doit(2) # y
-  doit(3) # x
+  visuals = {'xrgb':xrgb, 'yrgb':yrgb, 'plotlist':plotlist}
+  ts.show_trainvali(trainable, visuals, savepath)
 
 def predict_trainvali(net, trainable, savepath):
-  xs_train = trainable['xs_train']
-  xs_vali  = trainable['xs_vali']
-  ys_train = trainable['ys_train']
-  ys_vali  = trainable['ys_vali']
-  ws_train = trainable['ws_train']
-  ws_vali  = trainable['ws_vali']
   xsem = trainable['xsem']
   ysem = trainable['ysem']
   xrgb = [xsem['mem'], xsem['nuc'], xsem['nuc']]
   yrgb = [ysem['mem'], ysem['nuc'], ysem['bg']]
-
-  pred_xs_train = net.predict(xs_train, batch_size=1)
-  pred_xs_vali  = net.predict(xs_vali, batch_size=1)
-
-  def norm(img):
-    # img = img / img.mean() / 5
-    axis = tuple(np.arange(len(img.shape)-1))
-    mi,ma = img.min(axis,keepdims=True), img.max(axis,keepdims=True)
-    # mi,ma = np.percentile(img, [5,95])
-    img = (img-mi)/(ma-mi)
-    img = np.clip(img, 0, 1)
-    return img
-
-  def plot(xs, ys, preds):
-    xs = norm(xs[...,xrgb])
-    ys = norm(ys[...,yrgb])
-    preds = norm(preds[...,yrgb])
-    xs[...,2] = 0
-    res = np.stack([xs,ys,preds],0)
-    n_patches = res.shape[1]
-    r, c = max(1, n_patches//5), 5
-    res = splt(res[:,:r*c], r, 1)
-    res = collapse2(res, 'iRCyxc','Ry,Cix,c')
-    return res
-
-  def mid(arr,i):
-    ss = [slice(None) for _ in arr.shape]
-    ss[i] = arr.shape[i]//2
-    return arr[ss]
-
-  def doit(i):
-    res1 = plot(mid(xs_train,i), mid(ys_train,i), mid(pred_xs_train,i))
-    res2 = plot(mid(xs_vali,i), mid(ys_vali,i), mid(pred_xs_vali,i))
-    if i in {2,3}:
-      res1 = zoom(res1, (5,1,1), order=1)
-      res2 = zoom(res2, (5,1,1), order=1)
-    io.imsave(savepath / 'pred_train_{:d}.png'.format(i), res1)
-    io.imsave(savepath / 'pred_vali_{:d}.png'.format(i), res2)
-
-  doit(1) # z
-  doit(2) # y
-  doit(3) # x
+  visuals = {'xrgb':xrgb, 'yrgb':yrgb, 'plotlist':plotlist}
+  ts.predict_trainvali(net, trainable, visuals, savepath)
 
 def predict(net,img,xsem,ysem):
   container = np.zeros(img.shape[:-1] + (ysem['n_channels'],))
@@ -303,24 +317,67 @@ def predict(net,img,xsem,ysem):
   # patchshape_padded = [1,24,400,400]
   borders = xsem['borders']
   patchshape_padded = list(xsem['patchsize'])
+  patchshape_padded[1] = 400
   patchshape_padded[2] = 400
-  patchshape_padded[3] = 400
   padding = [(b,b) for b in borders] + [(0,0)]
 
   patches = patchmaker.patchtool({'img':container.shape[:-1], 'patch':patchshape_padded, 'borders':borders})
   # patches = xsem['res_patches']
   img = np.pad(img, padding, mode='constant')
+  ax_zyx = (0,1,2)
 
   s2 = patches['slice_patch']
   for i in range(len(patches['slices_padded'])):
     s1 = patches['slices_padded'][i]
     s3 = patches['slices_valid'][i]
     x = img[s1]
-    x = x / x.mean((1,2,3), keepdims=True)
+    x = x / x.mean(ax_zyx, keepdims=True)
     # x = collapse2(x, 'szyxc','s,y,x,zc')
-    container[s3] = net.predict(x)[s2]
+    container[s3] = net.predict(x[np.newaxis])[s2]
 
   return container
+
+def load_img0_predict_eval(net, trainable, rawdata, homedir):
+  img2 = np.load(str(homedir / 'data/img006_noconv.npy'))
+  img2 = img2[0]
+  img2 = perm(img2, "ZCYX", "ZYXC")
+  img2 = norm_szyxc_per(img2,(0,1,2))
+  pimg = predict(net, img2, trainable['xsem'], trainable['ysem'])
+
+  if False:
+    cen = rawdata['cen']
+
+    x = pimg[...,1]
+    # hx = np.array([1,1,1]) / 3
+    # x = gputools.convolve_sep3(x, hx, hx, hx)
+    hyp = watershed(-x, label(cen)[0], mask=x>0.5)
+    print(hyp.max())
+
+    rawdata1 = build_rawdata(homedir)
+    gt_patches = dict()
+    gt_patches['gt_slices'] = rawdata1['gt_slices'][:-4]
+    gt_patches['inds_labeled_slices'] = rawdata1['inds_labeled_slices'][:, :-4]
+
+    seg_scores = ts.compute_seg_on_slices(hyp, gt_patches)
+    print(seg_scores)
+    print(seg_scores.mean())
+
+  return pimg
+
+def scores(pimg):
+  hyp = ts.segment(pimg, ts.segparams())
+  hypslices = ts.hyp2hypslices(hyp, rawdata1['inds_labeled_slices'][1], [0]*31)
+
+def optimize_pimg_on_t0(pimg, homedir, mypath_opt):
+  segparams = ts.segparams()
+  rawdata = build_rawdata(homedir)
+  gt_patches = dict()
+  gt_patches['gt_slices'] = rawdata['gt_slices'][:-4]
+  gt_patches['inds_labeled_slices'] = rawdata['inds_labeled_slices'][:, :-4]
+  best = ts.optimize_segmentation(pimg, {**rawdata, **gt_patches}, segparams, mypath_opt)
+  hyp = np.array([segparams['function'](x, best) for x in pimg])
+  seg_scores = ts.compute_seg_on_slices(hyp, rawdata)
+  return seg_scores
 
 ## divisions and results
 
@@ -435,9 +492,9 @@ def show_results2(pimg, rawdata, trainable, savepath=None):
     preds = norm(preds[...,yrgb])
     xs[...,2] = 0
     res = np.stack([xs,ys,preds],0)
-    n_patches = res.shape[1]
-    r, c = max(1, n_patches//5), 5
-    res = splt(res[:,:r*c], r, 1)
+    res = ts.pad_divisible(res, 1, 5)
+    r,c = res.shape[1]//5, 5
+    res = splt(res, r, 1)
     res = collapse2(res, 'iRCyxc','Ry,Cix,c')
     return res
 
@@ -458,6 +515,8 @@ def show_results2(pimg, rawdata, trainable, savepath=None):
   doit(1) # z
   doit(2) # y
   doit(3) # x
+
+
 
 def find_divisions(pimg, ysem, savepath=None):
   ch_div = ysem['div']
@@ -551,6 +610,56 @@ numpy style indexing in tensorflow would make cusom metrics easier to create.
 If I dont' add borders there are only 8 patches available in the 3D unet with 40x104x104 size.
 This means only one patch for validation.
 This is annoying.
+
+## Thu Aug 23 12:15:28 2018
+
+Let's try something new...
+Let's throw away all the handmade ground truth that we have.
+Instead we're going to bootstrap our way into ground truth using the centerpoint annotations.
+These annotations can be the start of a full 3D seeded watershed segmentation.
+And we can use that segmentation to train a full 3D unet.
+
+In order for this to be useful the 3D unet must be *better than the watershed* and it must even be 
+better than the watershed after some simple pre- and post- processing! (if we compare the 
+watershed on img vs watershed on pimg with same seeds.)
+
+but the result after unet looks much smoother, denoised, and nicer.
+also, since we have full 3D instances, we could use them to train an end-to-end model like 3D stardist
+or 3D GMM.
+
+We can also play with the 3D instances to make them easier to learn or to produce better segmentations.
+- try dilating the membrane region. membrane is much more important than nuc or bg.
+  this also effectively shrinks the nuc region, which is essentially what 
+
+
+It appears that having dist-2-mem weights doesn't help to strengthen the intensity of the membrane
+*within* and *between* adjacent nuclei, only the membrane between nuclei and bg!!
+This is obnoxious. It may be because the membrane between nuclei is hard to get right...
+
+What if we increase the width of the membrane region everywhere?
+
+- test out these predictions against hand-annotated data and compute seg score.
+- 
+
+
+How to test against hand-curated data?
+- we need a pimg / hyp covering the entire timeseries
+  - it doesn't matter how it was made
+  - it doesn't require the classifier
+  - it should be a separate module for testing segmentation stuff
+
+idea: dilate membrane, but only in x&y directions! That's where the signal is weak!
+
+idea: do watershed from seed points on the fly while training using random, reasonable mask level!
+(also use rotations.)
+also augment the input *before* watershed? should be robust to noise, blur, etc.
+
+classweights just make every pixel look a bit more like membrane class.
+
+let's try to regress dist to bg from this data...
+
+
+
 
 
 

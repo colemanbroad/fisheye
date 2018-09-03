@@ -13,24 +13,35 @@ import train_seg_lib as ts
 patch = patchmaker
 import czifile
 
+def norm(img, axis=(0,1,2), naxis=None):
+  if naxis:
+    axset = set(np.arange(img.ndim))
+    axis = tuple(axset - set(naxis))
+  mi,ma = np.percentile(img, [2,99], axis=axis, keepdims=True)
+  img = (img-mi) / (ma - mi)
+  return img
+
 def build_rawdata(homedir):
   imgname = '/net/fileserver-nfs/stornext/snfs2/projects/myersspimdata/Mauricio/for_coleman/ph3_labels_trainingdata_07_10_2018/trainingdata_ph3labels_hspph2bandbactinlap2bline_fish6_justph3andh2b.czi'
   img = czifile.imread(imgname)
   img = img[0,0,0,0,0,:,0,:,:,:,0] # CZYX
   img = perm(img, "CZYX","ZYXC")
-  sh = np.array(img.shape)[:-1] // 8
-  ss = patchmaker.se2slices(sh,7*sh)
+  shrink = 8
+  sh = np.array(img.shape)[:-1] // shrink
+  ss = patchmaker.se2slices(sh,(shrink-1)*sh)
   img = img[ss]
-  img = img / img.mean(axis=(0,1,2), keepdims=True)
+  img = norm(img)
 
-  sig = 5
-  wid = 16
+  # img2 = img[ss]
+  # img2 = img2 / img2.max(axis=(0,1,2), keepdims=True)
+
+  sig = 20
+  wid = 40
   def f(x): return np.exp(-(x*x).sum()/(2*sig**2))
   kern = math_utils.build_kernel_nd(wid,3,f)
-  kern = kern[::4] ## anisotropic kernel matches img
+  kern = kern[::5] ## anisotropic kernel matches img
   kern = kern / kern.sum()
 
-  # cen[list(points.T)] = 1
   img[...,0] = fftconvolve(img[...,0], kern, mode='same')
   # img = img / img.mean(axis=(0,1,2), keepdims=True)
 
@@ -57,7 +68,7 @@ def build_trainable(rawdata):
   weight_stack = compute_weights(rawdata)
 
   ## add extra cell center channel
-  patchsize = (16,240,240)
+  patchsize = (32,320,320)
   borders = (0,0,0)
   res = patch.patchtool({'img':img.shape[:-1], 'patch':patchsize, 'borders':borders}) #'overlap_factor':(2,1,1)})
   slices = res['slices_padded']
@@ -66,11 +77,11 @@ def build_trainable(rawdata):
   xsem['borders'] = borders
 
   ## pad images
-  if False:
-    cat = np.concatenate
-    padding = np.array([borders, borders]).T
-    img = np.pad(img, cat([padding, [[0,0]] ], 0), mode='constant')
-    weight_stack = np.pad(weight_stack, padding, mode='constant')
+
+  cat = np.concatenate
+  padding = np.array([borders, borders]).T
+  img = np.pad(img, cat([padding, [[0,0]] ], 0), mode='constant')
+  weight_stack = np.pad(weight_stack, padding, mode='constant')
 
   ## extract slices
   xs = np.array([img[ss][...,[1]] for ss in slices])
@@ -78,21 +89,23 @@ def build_trainable(rawdata):
   ws = np.array([weight_stack[ss] for ss in slices])
   inds = np.argsort(ys.sum((1,2,3,4)))
   res['inds'] = inds
-  xs = xs[inds[::-1][:9]]
-  ys = ys[inds[::-1][:9]]
-  ws = ws[inds[::-1][:9]]
+  xs = xs[inds[::-1][:30]]
+  ys = ys[inds[::-1][:30]]
+  ws = ws[inds[::-1][:30]]
   # ipdb.set_trace()
   # ys = (ys > np.percentile(ys,90.,axis=(1,2,3,4)).reshape((-1,1,1,1,1))).astype(np.int)
   # ys = np_utils.to_categorical(ys).reshape(ys.shape[:-1] + (-1,))
 
   ## normalize over space. sample and channel independent
-  xs = xs/np.mean(xs,(1,2,3), keepdims=True)
-  ys = ys/np.mean(ys,(1,2,3), keepdims=True)
+  # xs = xs/np.mean(xs,(1,2,3), keepdims=True)
+  # ys = ys/np.mean(ys,(1,2,3), keepdims=True)
+  xs = norm(xs, axis=(1,2,3))
+  ys = norm(ys, axis=(1,2,3))
   
   print(xs.shape, ys.shape, ws.shape)
 
-  # res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws})
-  res = ts.copy_split({'xs':xs,'ys':ys,'ws':ws})
+  res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws})
+  # res = ts.one_vali({'xs':xs,'ys':ys,'ws':ws})
   res['xsem'] = xsem
   res['ysem'] = ysem
   res['slices'] = slices
@@ -134,7 +147,7 @@ def build_net(xsem, ysem):
   net.compile(optimizer=optim, loss={'B':loss}, metrics={'B':met0}) # metrics=['accuracy'])
   return net
 
-def show_trainvali(trainable, savepath):
+def show_trainvali(trainable, savepath, vali=True):
   xs_train = trainable['xs_train']
   xs_vali  = trainable['xs_vali']
   ys_train = trainable['ys_train']
@@ -159,9 +172,9 @@ def show_trainvali(trainable, savepath):
     ys = norm(ys[...,yrgb])
     xs[...,2] = 0
     res = np.stack([xs,ys],0)
-    n_patches = res.shape[1]
-    r, c = max(1, n_patches//5), 5
-    res = splt(res[:,:r*c], r, 1)
+    res = ts.pad_divisible(res, 1, 5)
+    r,c = res.shape[1]//5, 5
+    res = splt(res, r, 1)
     res = collapse2(res, 'iRCyxc','Ry,Cix,c')
     return res
 
@@ -174,18 +187,18 @@ def show_trainvali(trainable, savepath):
 
   def doit(i):
     res1 = plot(mid(xs_train,i), mid(ys_train,i))
-    res2 = plot(mid(xs_vali,i), mid(ys_vali,i))
-    if i in {2,3}:
-      res1 = zoom(res1, (5,1,1), order=1)
-      res2 = zoom(res2, (5,1,1), order=1)
+    if i in {2,3}: res1 = zoom(res1, (5,1,1), order=1)
     io.imsave(savepath / 'dat_train_{:d}.png'.format(i), res1)
-    io.imsave(savepath / 'dat_vali_{:d}.png'.format(i), res2)
+    if vali:
+      res2 = plot(mid(xs_vali,i), mid(ys_vali,i))
+      if i in {2,3}: res2 = zoom(res2, (5,1,1), order=1)
+      io.imsave(savepath / 'dat_vali_{:d}.png'.format(i), res2)
 
   doit(1) # z
   doit(2) # y
   doit(3) # x
 
-def predict_trainvali(net, trainable, savepath=None):
+def predict_trainvali(net, trainable, savepath=None, vali=True):
   xs_train = trainable['xs_train']
   xs_vali  = trainable['xs_vali']
   ys_train = trainable['ys_train']
@@ -217,8 +230,8 @@ def predict_trainvali(net, trainable, savepath=None):
     ps = norm(ps[...,yrgb]) # predictions
     xs[...,2] = 0
     res = np.stack([xs,ys,ps],0)
-    n_patches = res.shape[1]
-    r, c = max(1, n_patches//5), 5
+    res = ts.pad_divisible(res, 1, 5)
+    r,c = res.shape[1]//5, 5
     res = splt(res[:,:r*c], r, 1)
     res = collapse2(res, 'iRCyxc','Ry,Cix,c')
     return res
@@ -231,12 +244,12 @@ def predict_trainvali(net, trainable, savepath=None):
 
   def doit(i):
     res1 = plot(mid(xs_train,i), mid(ys_train,i), mid(pred_xs_train,i))
-    res2 = plot(mid(xs_vali,i), mid(ys_vali,i), mid(pred_xs_vali,i))
-    if i in {2,3}:
-      res1 = zoom(res1, (5,1,1), order=1)
-      res2 = zoom(res2, (5,1,1), order=1)
+    if i in {2,3}: res1 = zoom(res1, (5,1,1), order=1)
     io.imsave(savepath / 'pred_train_{:d}.png'.format(i), res1)
-    io.imsave(savepath / 'pred_vali_{:d}.png'.format(i), res2)
+    if vali:
+      res2 = plot(mid(xs_vali,i), mid(ys_vali,i), mid(pred_xs_vali,i))
+      if i in {2,3}: res2 = zoom(res2, (5,1,1), order=1)
+      io.imsave(savepath / 'pred_vali_{:d}.png'.format(i), res2)
 
   doit(1) # z
   doit(2) # y
@@ -301,11 +314,10 @@ def predict(net, img, xsem, ysem):
   container = np.zeros(img.shape[:-1] + (ysem['n_channels'],))
   cat = np.concatenate
 
-  
   borders = np.array((0,20,20,20))
   patchshape = np.array([1,64,200,200]) + 2*borders
   assert np.all([4 in factors(n) for n in patchshape[1:]]) ## unet shape requirements
-  res = patch.patchtool({'sh_img':img.shape[:-1], 'sh_patch':patchshape, 'sh_borders':borders})
+  res = patch.patchtool({'img':img.shape[:-1], 'patch':patchshape, 'borders':borders})
   padding = np.array([borders, borders]).T
   img = np.pad(img, cat([padding,[[0,0]]],0), mode='constant')
   s2  = res['slice_patch']
@@ -393,6 +405,37 @@ def detect2(pimg, rawdata):
   res['n_fused'] = n_fused
   return res
 
+def detect_peaks(image):
+  """
+  Takes an image and detect the peaks usingthe local maximum filter.
+  Returns a boolean mask of the peaks (i.e. 1 when
+  the pixel's value is the neighborhood maximum, 0 otherwise)
+  """
+
+  # define an 8-connected neighborhood
+  neighborhood = generate_binary_structure(3,3)
+
+  #apply the local maximum filter; all pixel of maximal value 
+  #in their neighborhood are set to 1
+  local_max = maximum_filter(image, footprint=neighborhood)==image
+  #local_max is a mask that contains the peaks we are 
+  #looking for, but also the background.
+  #In order to isolate the peaks we must remove the background from the mask.
+
+  #we create the mask of the background
+  background = (image==0)
+
+  #a little technicality: we must erode the background in order to 
+  #successfully subtract it form local_max, otherwise a line will 
+  #appear along the background border (artifact of the local maximum filter)
+  eroded_background = binary_erosion(background, structure=neighborhood, border_value=1)
+
+  #we obtain the final mask, containing only peaks, 
+  #by removing the background from the local_max mask (xor operation)
+  detected_peaks = local_max ^ eroded_background
+
+  return detected_peaks
+
 
 
 
@@ -435,7 +478,24 @@ It's possible to overfit on many patches.
 If the overfitting does't look very good then the model is too constrained.
 How many params? 1.5 mil. how many pixels? 240x240x16x9. 8 mil.
 OK, now the overfitting looks *very* good. The 3down 32chan 3px kern net is able to memorize 9 patches.
-see `w020.h5` in ph3_test for the model weights.
+see `w020.h5` in ph3_test for the model weights. loss was 0.02.
+
+Tue Aug 21 09:23:20 2018
+
+Let's try retraining on those 9 patches from scratch...
+mse loss starts at 2.756 and goes down to... 
+after 300 epochs the train loss is down to 0.02, but the val_loss is still high: 0.8...
+
+In ph3_010 we were able to train successfully on 50 images, getting train loss of 0.02,
+but unfortunately the validation loss on 10 pathes was completely flat the entire time.
+We used a net with pretrained weights from ph3_009.
+I think this means that the data is simply very difficult to learn...
+
+Let's try blurring a little bit more to remove all the texture from the output, just keep rough shape.
+Maybe it's possible to generalize the detection of mitotic features, but not the prediction of precise ph3 label channel.
+start w pretrained w020. loss starts at 0.8
+
+---
 
 
 

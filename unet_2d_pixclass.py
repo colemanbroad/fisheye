@@ -30,7 +30,7 @@ def build_rawdata(homedir):
   ## load data
   # img = imread(str(homedir / 'data/img006.tif'))
   img = np.load(str(homedir / 'data/img006_noconv.npy'))
-  img = perm(img,"TZCYX", "TZYXC")
+  img = perm(img, "TZCYX", "TZYXC")
   imgsem = {'axes':"TZYXC", 'nuc':0, 'mem':1, 'n_channels':2}
 
   # img = np.load(str(homedir / 'isonet/restored.npy'))

@@ -4,20 +4,15 @@ import unet_dist2center as dc
 import unet_3d_pixclass as u3
 import unet_2d_pixclass as u2
 import unet_ph3regress as ph3
+import unet_3d_cele as ce
+import unet_dist2bg as bg
 
 homedir = Path('./')
-loaddir = Path('training/ph3_test/')
-savedir = Path('training/ph3_test/')
+loaddir = Path('training/ce_test/')
+savedir = Path('training/ce_test/')
 mypath_opt = savedir
+m = ce
 
-print("HOME:", homedir.absolute())
-
-m = ph3
-
-rawdata = m.build_rawdata(homedir)
-trainable = m.build_trainable(rawdata)
-
-## custom stuff for running script
 def rm_if_exists_and_copy(p):
   p = Path(p)
   if (savedir / p).exists():
@@ -32,28 +27,151 @@ if __name__ == '__main__':
 
   savedir.mkdir(exist_ok=True)
   # shutil.copy(__file__, savedir)
-  for p in ['train_seg_lib.py', 'unet_dist2center.py', 'unet_2d_pixclass.py', 'unet_3d_pixclass.py']:
+  for p in ['train_seg_lib.py', 'unet_3d_cele.py', 'unet_dist2center.py', 'unet_2d_pixclass.py', 'unet_3d_pixclass.py']:
       rm_if_exists_and_copy(p)
 
+
+## dist2bg model
+
+if False:
+  # rawdata = m.build_rawdata(homedir)
+
+  rawgt = pickle.load(open('training/ce_test/rawgt.pkl','rb'))
+
+  net = m.build_net((120,120,120,1),1,activation='linear')
+
+  # lod = np.array(m.revertdict(rawgt['gt']))
+  # rawgt['train'] = m.invertdict(lod[[0,3,4]])
+  # rawgt['vali'] = m.invertdict(lod[[1,2]])
+
+  tg = m.datagen(rawgt['train'], targetname='target2')
+  vg = m.datagen(rawgt['vali'], targetname='target2')
+
+  traindir = savedir / 'train_d2bg/'
+  traindir.mkdir(exist_ok=True)
+
+  examples = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 5)]
+  hical = m.Histories(examples, traindir)
+
+  history = ts.train_gen(net, tg, vg, traindir, n_epochs=80, steps_per_epoch=30, callbacks=[hical])
+  ts.plot_history(history, start=0, savepath=traindir)
+  net.load_weights(history['weightname'])
+
+  pimg = m.predict(net, rawgt['vali']['source'], outchan=1)
+  res = m.show_rawdata(rawgt['vali'],pimg,1)
+  io.imsave(traindir / 'result.png', res)
+
+  # m.optimize_seg_separate_net(net,homedir,savedir)
+
+  print('success')
+  sys.exit(0)
+
+## render movies from a pretrained classifier
+
+# traindir = savedir / 'train_cp'; traindir.mkdir(exist_ok=True);
+# resultdir = traindir / 'results'; resultdir.mkdir(exist_ok=True);
+pimgdir = Path('training/ce_014/pimgs2/'); pimgdir.mkdir(exist_ok=True);
+# renderdir = pimgdir / 'figs'; renderdir.mkdir(exist_ok=True);
+
+net = m.build_net((120,120,120,1), 2, activation='softmax')
+net.load_weights('training/ce_012/train_cp/w001_final.h5')
+m.save_pimgs(net,pimgdir)
+# m.make_movie(net,renderdir,0,250)
+
+sys.exit(0)
+
+## train and evaluate classifier
+
+traindir = savedir / 'train_cp/'; traindir.mkdir(exist_ok=True);
+resultdir = traindir / 'results'; resultdir.mkdir(exist_ok=True);
+
+rawdata = m.build_rawdata(homedir)
+
+for i in [1,2,3]:
+  res = m.show_rawdata(rawdata['vali'],i=i)
+  io.imsave(traindir / 'rawdata_vali_{:02d}.png'.format(i), res)
+
+net = m.build_net((120,120,120,1),2,activation='softmax')
+
+tg = m.datagen(rawdata['train'])
+vg = m.datagen(rawdata['vali'])
+
+examples = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 5)]
+hical = m.Histories(examples, traindir)
+
+history = ts.train_gen(net, tg, vg, traindir, n_epochs=60, steps_per_epoch=30, callbacks=[hical])
+ts.plot_history(history, start=1, savepath=traindir)
+net.load_weights(history['weightname'])
+
+results = m.analyze_cpnet(net,rawdata,resultdir)
+pickle.dump(results, open(resultdir / 'results.pkl', 'wb'))
+
+rawgt = m.build_gt_rawdata(homedir)
+results_gt = m.analyze_cpnet(net,rawgt,resultdir)
+pickle.dump(results_gt, open(resultdir / 'results_gt.pkl', 'wb'))
+
+print('success')
+sys.exit(0)
+
+## analysis
+
+results_gt = pickle.load(open(resultdir / 'results_gt.pkl', 'rb'))
+gtdata = m.labnames2imgs_cens(m.labnames(1),1)
+m.mk_hyps_compute_seg(gtdata, results_gt)
+
+
+
+
+
+
+## old training
+
+rawdata = m.build_rawdata(homedir)
+# pickle.dump(rawdata, open(savedir / 'rawdata.pkl','wb'))
+trainable = m.build_trainable(rawdata)
+m.show_trainvali(trainable, savedir)
+
+net = m.build_net(trainable)
+ns = trainable['vali']['xs'].shape[0]
+ns = floor(np.sqrt(ns))
+
+traindir = savedir / 'train/'
+traindir.mkdir()
+hical = m.Histories(trainable['vali']['xs'][::ns], trainable['vali']['ys'][::ns], traindir)
+
+history = ts.train(net, trainable, traindir, n_epochs=40, batchsize=1,callbacks=[hical])
+history = history.history
+# history = eval(open(loaddir / 'history.txt','r').read())
+
+ts.plot_history(history, savedir)
+net.load_weights(history['weightname'])
+m.predict_trainvali(net, trainable, savedir)
+pimg = m.predict(net, rawdata['vali']['source'])
+np.save(savedir / 'pimg', pimg)
+
+sys.exit(0)
 # m.show_trainvali(trainable, savepath=savedir)
 
 ## train net and plot trajectories
 
 savedir = savedir / "remove"
-
 val_losses = []
 for i in range(10):
   trainable = m.build_trainable(rawdata)
   savedir = savedir.parent / "t{:03d}".format(i)
   savedir.mkdir(exist_ok=True)
-  net = m.build_net(trainable['xsem'], trainable['ysem'])
-  history = ts.train(net, trainable, savedir, n_epochs=40, batchsize=1)
-  best_val = min(history.history['val_loss'])
+  net = m.build_net(trainable)
+  # net.load_weights('training/ph3_009/t000/w001.h5')
+  traindir = savedir / 'epochs'
+  traindir.mkdir()
+  history = ts.train(net, trainable, traindir, n_epochs=150, batchsize=1)
+  history = history.history
+  best_val = min(history['val_loss'])
   val_losses.append(best_val)
   print("HISTORY: ", i, " ", best_val)
   ts.plot_history(history, savedir)
   m.predict_trainvali(net, trainable, savedir)
-  json.dump(history.history, open(savedir / 'history.json', 'w'), indent=2, cls=NumpyEncoder)
+  json.dump(history, open(savedir / 'history.json', 'w'), indent=2, cls=NumpyEncoder)
 
 savedir = savedir.parent
 
@@ -102,6 +220,7 @@ best val loss in range [0.15, 0.22] with many 0.18 and 0.19 values.
 seg is 0.805 ! best so far.
 
 *Does the variability come from the train/vali split, model initialization or SGD?*
+
 
 
 """
