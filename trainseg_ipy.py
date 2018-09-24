@@ -1,17 +1,17 @@
+# import unet_dist2center as dc
+# import unet_3d_pixclass as u3
+# import unet_2d_pixclass as u2
+# import unet_ph3regress as ph3
+# import unet_dist2bg as bg
 from segtools.defaults.ipython_remote import *
 import train_seg_lib as ts
-import unet_dist2center as dc
-import unet_3d_pixclass as u3
-import unet_2d_pixclass as u2
-import unet_ph3regress as ph3
 import unet_3d_cele as ce
-import unet_dist2bg as bg
-
-homedir = Path('./')
-loaddir = Path('training/ce_test/')
-savedir = Path('training/ce_test/')
-mypath_opt = savedir
+savedir = Path('training/ce_test6/'); savedir.mkdir(exist_ok=True);
+# homedir = Path('./')
+# loaddir = Path('training/ce_022/')
+# mypath_opt = savedir
 m = ce
+
 
 def rm_if_exists_and_copy(p):
   p = Path(p)
@@ -30,6 +30,57 @@ if __name__ == '__main__':
   for p in ['train_seg_lib.py', 'unet_3d_cele.py', 'unet_dist2center.py', 'unet_2d_pixclass.py', 'unet_3d_pixclass.py']:
       rm_if_exists_and_copy(p)
 
+
+# trials = m.optimize_seg_joint(savedir, max_evals=200)
+m.fig3pkl()
+sys.exit(0)
+
+
+if False:
+  m.doitall(savedir)
+
+if False:
+  imgdirs = ["Fluo-N3DH-CE/01/", "Fluo-N3DH-CE/02/", "Fluo-N3DH-CE_challenge/01/", "Fluo-N3DH-CE_challenge/02/"]
+  pimgextensions = ['train1/', 'train2/', 'chall1/', 'chall2']
+  # imgdirs = ["Fluo-N3DH-CE/02/", "Fluo-N3DH-CE_challenge/01/", "Fluo-N3DH-CE_challenge/02/"]
+  # pimgextensions = ['train2/', 'chall1/', 'chall2']
+  ws = [3,4,5,6]
+  for i in range(len(pimgextensions)):
+    # plt.figure()
+    for t in range(29,31):
+      imgdir = Path(imgdirs[i])
+      pimgdir = Path("training/ce_{:03d}/train_cp/pimgs/".format(t))
+      extdir = pimgdir / pimgextensions[i]
+      # cellcounts = eval((extdir / 'counts.txt').open().read())
+      plt.plot([c[1] for c in cellcounts], label=str(ws[t-27]))
+      zcolordir = extdir / 'zcolor'
+      n = 250 if i == 0 else 190
+      m.pimgs2movie(extdir, imgdir, zcolordir, range(0,n))
+      watersheddir = extdir / 'watershed'
+      savedir = watersheddir / 'movie'
+      m.hyps2movie(watersheddir,imgdir,savedir,range(0,n))
+    # plt.legend()
+    # plt.title(pimgextensions[i])
+    # plt.savefig(str(pimgdir / 'traj{:02d}.png'.format(ws[i])))
+
+  sys.exit(0)
+
+## make pimgs
+
+if True:
+  imgdirs = ["Fluo-N3DH-CE/01/", "Fluo-N3DH-CE/02/", "Fluo-N3DH-CE_challenge/01/", "Fluo-N3DH-CE_challenge/02/"]
+  pimgextensions = ['train1/', 'train2/', 'chall1/', 'chall2']
+
+  net = m.build_net((120,120,120,1), 2, activation='softmax')
+  net.load_weights('training/ce_059/train_cp/epochs/w_match_0.935_132.h5')
+  pimgdir = Path('training/ce_059/train_cp/pimgs/')
+  m.save_pimgs(net, pimgdir/'train1', Path(imgdirs[0]), range(0,250)) #challenge=False,n=1)
+  m.save_pimgs(net, pimgdir/'train2', Path(imgdirs[1]), range(0,250)) #challenge=False,n=2)
+  m.save_pimgs(net, pimgdir/'chall1', Path(imgdirs[2]), range(0,190)) #challenge=True,n=1)
+  m.save_pimgs(net, pimgdir/'chall2', Path(imgdirs[3]), range(0,190)) #challenge=True,n=2)
+
+  print('success')
+  sys.exit(0)
 
 ## dist2bg model
 
@@ -58,7 +109,7 @@ if False:
   net.load_weights(history['weightname'])
 
   pimg = m.predict(net, rawgt['vali']['source'], outchan=1)
-  res = m.show_rawdata(rawgt['vali'],pimg,1)
+  res  = m.show_rawdata(rawgt['vali'],pimg,1)
   io.imsave(traindir / 'result.png', res)
 
   # m.optimize_seg_separate_net(net,homedir,savedir)
@@ -68,61 +119,71 @@ if False:
 
 ## render movies from a pretrained classifier
 
-# traindir = savedir / 'train_cp'; traindir.mkdir(exist_ok=True);
-# resultdir = traindir / 'results'; resultdir.mkdir(exist_ok=True);
-pimgdir = Path('training/ce_014/pimgs2/'); pimgdir.mkdir(exist_ok=True);
-# renderdir = pimgdir / 'figs'; renderdir.mkdir(exist_ok=True);
+if False:
+  # traindir = savedir / 'train_cp'; traindir.mkdir(exist_ok=True);
+  # resultdir = traindir / 'results'; resultdir.mkdir(exist_ok=True);
+  pimgdir = Path('training/ce_014/pimgs2/'); pimgdir.mkdir(exist_ok=True);
+  # renderdir = pimgdir / 'figs'; renderdir.mkdir(exist_ok=True);
 
-net = m.build_net((120,120,120,1), 2, activation='softmax')
-net.load_weights('training/ce_012/train_cp/w001_final.h5')
-m.save_pimgs(net,pimgdir)
-# m.make_movie(net,renderdir,0,250)
+  net = m.build_net((120,120,120,1), 2, activation='softmax')
+  net.load_weights('training/ce_012/train_cp/w001_final.h5')
+  m.save_pimgs(net,pimgdir)
+  # m.make_movie(net,renderdir,0,250)
 
-sys.exit(0)
+  sys.exit(0)
 
 ## train and evaluate classifier
 
-traindir = savedir / 'train_cp/'; traindir.mkdir(exist_ok=True);
-resultdir = traindir / 'results'; resultdir.mkdir(exist_ok=True);
+if True:
+  traindir  = savedir  / 'train_cp/'; traindir.mkdir(exist_ok=True);
+  resultdir = traindir / 'results/'; resultdir.mkdir(exist_ok=True);
+  epochdir  = traindir / 'epochs/'; epochdir.mkdir(exist_ok=True);
+  pimgdir  = traindir / 'pimgs/'; pimgdir.mkdir(exist_ok=True);
 
-rawdata = m.build_rawdata(homedir)
+  rawdata = {'train':m.times2raw(range(0,195,10),1,homedir), 'vali':m.times2raw(range(5,195,10),1,homedir)}
+  # rawdata = {'train':m.times2raw([185],1,homedir), 'vali':m.times2raw([155],1,homedir)}
+  # rawdata = {'train':m.times2raw([40, 100],1,homedir), 'vali':m.times2raw([30, 105],1,homedir)}
+  # rawdata = {'train':times2raw([10,20,50,100,150],1,homedir), 'vali':times2raw([25,105],1,homedir)}
+  # rawdata = {'train':times2raw([10, 60, 140, 185],1,homedir), 'vali':times2raw([20, 75, 155, 175],1,homedir)}
 
-for i in [1,2,3]:
-  res = m.show_rawdata(rawdata['vali'],i=i)
-  io.imsave(traindir / 'rawdata_vali_{:02d}.png'.format(i), res)
+  for i in [1,2,3]:
+    res = m.show_rawdata(rawdata['vali'],i=i)
+    io.imsave(traindir / 'rawdata_vali_{:02d}.png'.format(i), res)
 
-net = m.build_net((120,120,120,1),2,activation='softmax')
+  weights = np.array([1,1])
+  weights[1] = 16.0
+  weights = weights / weights.sum()
+  weights = m.K.variable(weights)
 
-tg = m.datagen(rawdata['train'])
-vg = m.datagen(rawdata['vali'])
 
-examples = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 5)]
-hical = m.Histories(examples, traindir)
+  # net = m.build_net((120,120,120,1),2,activation='softmax',weights=weights)
+  net = m.build_net((120,120,120,1),2,activation='softmax')
 
-history = ts.train_gen(net, tg, vg, traindir, n_epochs=60, steps_per_epoch=30, callbacks=[hical])
-ts.plot_history(history, start=1, savepath=traindir)
-net.load_weights(history['weightname'])
+  tg = m.datagen(rawdata['train'])
+  vg = m.datagen(rawdata['vali'])
 
-results = m.analyze_cpnet(net,rawdata,resultdir)
-pickle.dump(results, open(resultdir / 'results.pkl', 'wb'))
+  examples = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 5)]
+  hical = m.Histories(examples, epochdir, weights=weights)
 
-rawgt = m.build_gt_rawdata(homedir)
-results_gt = m.analyze_cpnet(net,rawgt,resultdir)
-pickle.dump(results_gt, open(resultdir / 'results_gt.pkl', 'wb'))
+  history = ts.train_gen(net, tg, vg, traindir, n_epochs=60, steps_per_epoch=20, callbacks=[hical])
+  ts.plot_history(history, start=1, savepath=traindir)
+  net.load_weights(history['weightname'])
 
-print('success')
-sys.exit(0)
+  results = m.analyze_cpnet(net,rawdata,resultdir)
+  pickle.dump(results, open(resultdir / 'results.pkl', 'wb'))
+
+  rawgt = m.build_gt_rawdata(homedir)
+  results_gt = m.analyze_cpnet(net,rawgt,resultdir)
+  pickle.dump(results_gt, open(resultdir / 'results_gt.pkl', 'wb'))
+
+  print('success')
+  sys.exit(0)
 
 ## analysis
 
 results_gt = pickle.load(open(resultdir / 'results_gt.pkl', 'rb'))
 gtdata = m.labnames2imgs_cens(m.labnames(1),1)
 m.mk_hyps_compute_seg(gtdata, results_gt)
-
-
-
-
-
 
 ## old training
 

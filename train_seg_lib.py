@@ -42,7 +42,6 @@ def test_broad():
     return x[:,a,b,:].mean()
   return broadcast_over(f, (5,6))
 
-
 def random_augmentation_xy(xpatch, ypatch, train=True):
   if random.random()<0.5:
       xpatch = np.flip(xpatch, axis=1)
