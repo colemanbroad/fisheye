@@ -34,9 +34,8 @@ def build_cen(cenname):
   dat = updatekeys(dict(),locals(),['cen','pts','ncells'])
   return dat
 
-def cen2target_gauss(cendata):
+def cen2target_gauss(cendata,w=5):
   pts,cen = cendata['pts'], cendata['cen']
-  w = 5
   target,ksum = soft_gauss_target(pts,cen.shape,w=w)
   weights = np.ones(target.shape)
   n_target_pts = pts.shape[0]
@@ -44,20 +43,15 @@ def cen2target_gauss(cendata):
   dat = updatekeys(dict(),locals(),['target', 'n_target_pts', 'weights','ksum','w'])
   return dat
 
-def cen2target_class(cendata):
+def cen2target_class(cendata,w=5):
   pts,cen = cendata['pts'], cendata['cen']
   # target1,ksum1 = hard_round_target(pts,cen.shape,w=6)
-  w = 5
-  target2,ksum2 = hard_round_target(pts,cen.shape,w=w)
-  target = target2
-  ksum = ksum2
+  target,ksum = hard_round_target(pts,cen.shape,w=w)
   weights = np.ones(target.shape)
   n_target_pts = label(target)[1]
-  cm=1
-  weights[target==1] *= cm
-  weights = weights / weights.mean()
+  # weights = weights / weights.mean()
   target = np_utils.to_categorical(target).reshape(target.shape + (-1,))
-  dat = updatekeys(dict(),locals(),['cm', 'target', 'n_target_pts', 'weights','ksum','w'])
+  dat = updatekeys(dict(),locals(),['target', 'n_target_pts', 'weights','ksum','w'])
   return dat
 
 ## layer 3
@@ -133,13 +127,13 @@ def datagen(rawdata_train, patch_size=(48,48,48), batch_size=16):
   patchshape = np.array(patch_size)
 
   def patch():
-    r = random.randint(0,len(srcs)-1)
+    r = np.random.randint(0,len(srcs))
     src = srcs[r]
     trg = trgs[r]
     wgh = wghs[r]
     u_bound = np.array(src.shape[:-1]) - patchshape
     l_bound = [0,0,0]
-    ind = np.array([random.randint(l_bound[i],u_bound[i]) for i in range(len("ZYX"))])
+    ind = np.array([np.random.randint(l_bound[i],u_bound[i]+1) for i in range(len("ZYX"))])
     ss = patchmaker.se2slices(ind,ind+patchshape)
     y = trg[tuple(ss)]
     w = wgh[tuple(ss)]
@@ -186,7 +180,7 @@ def build_net(shape_params):
     ws = yt[...,-1]
     ws = ws[...,np.newaxis]
     yt = yt[...,:-1]
-    ce = ws * yt * K.log(yp + eps)
+    ce = ws * yt * K.log(yp + eps) #/ K.log(2.0)
     ce = -K.mean(ce,(0,1,2))
     print(K.shape(ce))
     ce = K.sum(ce*weights)

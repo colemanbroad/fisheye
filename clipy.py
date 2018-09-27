@@ -7,7 +7,6 @@ savedir = Path("training/ce_test6")
 # import clipy as c
 
 
-
 def do_it_all_classifier():
   pass
 
@@ -256,6 +255,45 @@ def mvfiles():
     print(f2)
     shutil.copy(f,f2)
 
+def showraw(raw,savedir):
+  for i in [1,2,3]:
+    res = clanalyze.show_rawdata(raw['vali'],i=i)
+    io.imsave(savedir / 'rawdata_vali_{:02d}.png'.format(i), res)
+
+## matching scores
+
+def matching_2cen(cen,pimg,th):
+  print(pimg.mean(),np.percentile(pimg,[2,50,90,99]))
+  x = clanalyze.cen2pts(cen)
+  y = clanalyze.cen2pts(pimg[0,...,0] > th)
+  kdt = pyKDTree(y)
+  dists, inds = kdt.query(x, k=1, distance_upper_bound=100)
+  indices,counts = np.unique(inds[inds<len(y)],return_counts=True)
+  return x,y,indices,counts
+
+def match_chan(yts,yps,chs=(1,1)):
+  "Samples ZYX C"
+  print(yts.shape,yps.shape)
+  def single(yt,yp):
+    pts0 = clanalyze.cen2pts(yt[...,chs[0]]>0.5)
+    pts1 = clanalyze.cen2pts(yp[...,chs[1]]>np.percentile(yp[...,chs[1]],98))
+    return len(pts1)
+  return np.mean([single(yt,yp) for yt,yp in zip(yts,yps)])
+
+
+def run_many():
+  for w in [3,5,7,9]:
+    np.random.seed(0)
+    savedir = Path('training/ce_run/class/w{:d}/'.format(w))
+    traindata = build_raw_class(savedir,w)
+    res = train_model(traindata)
+
+    np.random.seed(0)
+    savedir = Path('training/ce_run/gauss/w{:d}/'.format(w))
+    traindata = build_raw_gauss(savedir,w)
+    res = train_model(traindata)
+
+
 ## for training
 
 def bugfixraw():
@@ -316,197 +354,214 @@ def buildraw(targetfunc):
   data = {'train':raw_train,'vali':raw_vali}
   return data
 
-def showraw(raw,savedir):
-  for i in [1,2,3]:
-    res = clanalyze.show_rawdata(raw['vali'],i=i)
-    io.imsave(savedir / 'rawdata_vali_{:02d}.png'.format(i), res)
-
-def matching_2cen(cen,pimg,th):
-  print(pimg.mean(),np.percentile(pimg,[2,50,90,99]))
-  x = clanalyze.cen2pts(cen)
-  y = clanalyze.cen2pts(pimg[0,...,0] > th)
-  kdt = pyKDTree(y)
-  dists, inds = kdt.query(x, k=1, distance_upper_bound=100)
-  indices,counts = np.unique(inds[inds<len(y)],return_counts=True)
-  return x,y,indices,counts
-
-def a():
-  print(x.shape,y.shape)
-  g3 = graphmatch.connect_points_digraph_symmetric(x,y,k=1,dub=100)
-  return g3
-
-def matching_func_gauss(yt,yp):
-  pts0 = clanalyze.cen2pts(yt[...,0]>0.8)
-  pts1 = clanalyze.cen2pts(yp[...,0]>0.8)
-  # kdt = pyKDTree(y)
-  # dists, inds = kdt.query(x, k=k, distance_upper_bound=dub)
-  g3 = graphmatch.connect_points_symmetric(pts0,pts1,k=1,dub=100)
-  return g3
-
-def match_class(yts,yps):
-  "Samples ZYX C"
-  print(yts.shape,yps.shape)
-  def single(yt,yp):
-    pts0 = clanalyze.cen2pts(yt[...,1]>0.5)
-    pts1 = clanalyze.cen2pts(yp[...,1]>0.8)
-    g3 = graphmatch.connect_points_symmetric(pts0,pts1,k=1,dub=100)
-    return len(g3.edges())/len(g3.nodes())
-  return np.mean([single(yt,yp) for yt,yp in zip(yts,yps)])
-
-def train_classifier(rawdata,savedir):
-  traindir = savedir  / 'train_cp/'; traindir.mkdir(exist_ok=True);
-  epochdir = traindir / 'epochs/'; epochdir.mkdir(exist_ok=True);
-
+def build_raw_class(savedir,w):
+  # targetfunc = m.cen2target_class
+  xrgb = [0,0,0]
+  yrgb = [1,1,1]
+  raw = simpleraw(lambda x: m.cen2target_class(x,w))
+  updatekeys(raw,locals(),['xrgb','yrgb'])
+  
   weights = np.array([1,1])
-  weights[1] = 16.0
-  # weights[2] = 16.0
+  weights[1] = 32.0
   weights = weights / weights.sum()
   weights = K.variable(weights)
-  weight_decay = [2,1] #,.8]
 
-  out_channels = rawdata['train'][0]['target'].shape[-1]
-  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'softmax', 'task':'classification', 'weights':weights, 'lr':1e-4}
-  net = m.build_net(netparams)
-  # net.load_weights('training/ce_test6/train_cp/w072_final.h5')
+  ## callback stuff
+  if True:
+    callbackdata = build_callbackdata(raw)
 
-  tg  = m.datagen(rawdata['train'],patch_size=(48,48,48),batch_size=16)
-  vg  = m.datagen(rawdata['vali'], patch_size=(120,120,120),batch_size=1)
+    savedir.mkdir(exist_ok=True, parents=True)
+    traindir = savedir  / 'train_cp/'; traindir.mkdir(exist_ok=True);
+    epochdir = traindir / 'epochs/'; epochdir.mkdir(exist_ok=True);
 
-  def build_callbackdata():
-    # ex_vali  = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 5)]
-    tg2 = m.datagen(rawdata['train'],patch_size=(120,120,120),batch_size=1)
-    ex_train = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(tg2, 5)]
-    xs_train = np.array([x[0] for x in ex_train])
-    ys_train = np.array([x[1] for x in ex_train])
+    updatekeys(raw,locals(),['savedir', 'traindir','epochdir'])
 
-    xrgb = [0,0,0]
-    yrgb = [1,1,1]
+    f_match1 = lambda x,y: match_chan(x,y,(1,1))
+    f_match2 = lambda x,y: match_chan(x,y,(1,1))
 
-    img_final = m.build_img(imgnames(1)[189])['source']
-    cen_final = m.build_cen(cennames(1)[189])['cen']
-    cen_final = np_utils.to_categorical(cen_final).reshape(cen_final.shape + (-1,))
+    weight_decay = [2,1]
 
-    scores = []
-
-    callbackdata = fromlocals(locals(),['xs_train','ys_train','xrgb','yrgb','scores','img_final','cen_final'])
-    return callbackdata
-
-  def cbd_to_cb(callbackdata):
-    cbd = callbackdata
-    def epochend_callback(net,epoch):
-
-      ## update class weights
+    def f_custom(net,epoch):
       w = K.get_value(weights)
-      print(w, w.shape)
-      if (epoch % 1 == 0) and epoch > 0 and w[1]>(1/len(w)):
+      if (epoch % 2 == 0) and epoch > 0 and w[1]>(1/len(w)):
         w = w * weight_decay
         w = w / w.sum()
         print(w,w.shape)
         K.set_value(weights,w)
 
-      ## predict on training examples
-      yp_train = net.predict(cbd['xs_train'], batch_size=1)
-      score_patch = match_class(cbd['ys_train'],yp_train)
-      pimg_final  = clanalyze.predict(net, cbd['img_final'][None],2)
-      score_final = match_class(cbd['cen_final'][None], pimg_final)
+    funcs = fromlocals(locals(),['f_custom','f_match1','f_match2'])
+    epochend_callback = cbd_to_cb(callbackdata,raw,funcs)
+    callback = m.GlobalCallback(epochend_callback)
+    raw['callbackdata'] = callbackdata
 
-      scores.append(fromlocals(locals(), ['epoch','score_patch','score_final']))
+  out_channels = raw['train'][0]['target'].shape[-1]
+  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'softmax', 'task':'classification', 'weights':weights, 'lr':2e-4}
+  raw['netparams'] = netparams
 
-      # if len(tvs['matching_score'])==0 or score > max(tvs['matching_score']) and trainvali=='vali':
-      #   modelname = savedir / 'w_match_{:.3f}_{:03d}.h5'.format(score, epoch)
-      #   model.save_weights(str(modelname))
-      #   stuff['bestmodel'] = modelname
-      # tvs['matching_score'].append(score)
+  data = {'raw':raw,'callback':callback}
 
-      ## show them
-      xs = cbd['xs_train'][...,xrgb]
-      ys = cbd['ys_train'][...,yrgb]
-      yp = yp_train[...,yrgb]
-      res = clanalyze.plotlist([xs,ys,yp],1,c=1) #min(xs.shape[0],1))
-      io.imsave(savedir / 'train_{:03d}.png'.format(epoch), res)
-    return epochend_callback
+  return data
 
-  callbackdata = build_callbackdata()
-  epochend_callback = cbd_to_cb(callbackdata)
-  callback = m.GlobalCallback(epochend_callback)
-  history = ts.train_gen(net, tg, vg, traindir, n_epochs=2, steps_per_epoch=15, vali_steps=5, callbacks=[callback])
-
-  ts.plot_history(history, start=1, savepath=traindir)
-  # plot_callback(callbackdata)
-  # if callbackdata.get('bestmodel',None) is not None:
-  #   net.load_weights(str(callbackdata['bestmodel']))
-  #   net.save_weights(savedir / 'model_best.net')
-
-  res = fromlocals(locals(),['net','history','tg','vg','savedir','traindir','callbackdata'])
-  return res
-
-def train_regressor(rawdata,savedir):
-  traindir = savedir  / 'train_cp/'; traindir.mkdir(exist_ok=True);
-  epochdir = traindir / 'epochs/'; epochdir.mkdir(exist_ok=True);
-
-  weights = np.array([1,1])
-  weights[1] = 16.0
-  # weights[2] = 16.0
-  weights = weights / weights.sum()
-  weights = K.variable(weights)
-  weight_decay = [2,1] #,.8]
-
-  out_channels = rawdata['train'][0]['target'].shape[-1]
-  # netparams = {'inshape':(120,120,120,1), 'out_channels':out_channels, 'activation':'softmax', 'task':'classification', 'weights':weights, 'lr':1e-4}
-  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'linear', 'task':'regression', 'lr':5e-4}
-  net = m.build_net(netparams)
-  # net.load_weights('training/ce_test6/train_cp/w072_final.h5')
-
-  # net = m.build_net((120,120,120,1), 2, activation='softmax', weights=weights)
-  # net.load_weights('/projects/project-broaddus/fisheye/training/ce_059/train_cp/epochs/w_match_0.935_132.h5')
-
-  tg = m.datagen(rawdata['train'],patch_size=(48,48,48),batch_size=16)
-  tg2 = m.datagen(rawdata['train'],patch_size=(120,120,120),batch_size=1)
-  vg = m.datagen(rawdata['vali'],patch_size=(120,120,120),batch_size=1)
-  ex_vali = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 5)]
-  ex_train = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(tg2, 5)]
+def build_raw_gauss(savedir,w):
+  # targetfunc = m.cen2target_class
   xrgb = [0,0,0]
   yrgb = [0,0,0]
-
-  source = m.build_img(imgnames(1)[189])['source']
-  cen = m.build_cen(cennames(1)[189])['cen']
-
-  callbackdata = fromlocals(locals(),['ex_train','ex_vali','xrgb','yrgb','epochdir','matching_func','matching_2cen'])
-  callbackdata = updatekeys(callbackdata, locals(), ['source','cen','out_channels'])
-  callback = m.GlobalCallback(callbackdata)
-
-  history = ts.train_gen(net, tg, vg, traindir, n_epochs=2, steps_per_epoch=15, vali_steps=5, callbacks=[callback])
-
-  ts.plot_history(history, start=1, savepath=traindir)
-  plot_callback(callbackdata)
-  if callbackdata.get('bestmodel',None) is not None:
-    net.load_weights(str(callbackdata['bestmodel']))
-    net.save_weights(savedir / 'model_best.net')
-
-  res = fromlocals(locals(),['net','history','tg','vg','savedir','traindir','callbackdata'])
-  return res
-
-def plot_callback(callbackdata):
-  plt.figure()
-  for k in ['train_matching_score', 'val_matching_score', 'stack_scores',]:
-    plt.plot(callbackdata[k], label=k)
-  plt.legend()
-  plt.savefig(callbackdata['epochdir'] / 'callback_traj.pdf')
-
-def continuetrain(res):
-  net = res['net']
-  tg = res['tg']
-  vg = res['vg']
-  traindir = res['traindir']
-  callbackdata = res['callbackdata']
-
-  callback = m.GlobalCallback(res['callbackdata'])
-  history  = ts.train_gen(net, tg, vg, traindir, n_epochs=30, steps_per_epoch=30, vali_steps=10, callbacks=[callback])
+  raw = simpleraw(lambda x : m.cen2target_gauss(x,w=w))
+  updatekeys(raw,locals(),['xrgb','yrgb'])
   
-  ts.plot_history(history, start=1, savepath=traindir)
-  plot_callback(callbackdata)
-  net.load_weights(str(callbackdata['bestmodel']))
+  ## callback stuff
+  if True:
+    callbackdata = build_callbackdata(raw)
+
+    savedir.mkdir(exist_ok=True, parents=True)
+    traindir = savedir  / 'train_cp/'; traindir.mkdir(exist_ok=True);
+    epochdir = traindir / 'epochs/'; epochdir.mkdir(exist_ok=True);
+
+    updatekeys(raw,locals(),['savedir', 'traindir','epochdir'])
+
+    f_match1 = lambda x,y: match_chan(x,y,(0,0))
+    f_match2 = lambda x,y: match_chan(x,y,(1,0))
+
+    def f_custom(net,epoch):
+      pass
+
+    funcs = fromlocals(locals(),['f_custom','f_match1','f_match2'])
+    epochend_callback = cbd_to_cb(callbackdata,raw,funcs)
+    callback = m.GlobalCallback(epochend_callback)
+    raw['callbackdata'] = callbackdata
+
+  out_channels = raw['train'][0]['target'].shape[-1]
+  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'linear', 'task':'regression', 'lr':2e-4}
+  raw['netparams'] = netparams
+
+  data = {'raw':raw,'callback':callback}
+
+  return data
+
+## callback stuff
+
+def build_callbackdata(rawdata):
+  # ex_vali  = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 5)]
+  tg2 = m.datagen(rawdata['train'],patch_size=(120,120,120),batch_size=1)
+  ex_train = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(tg2, 5)]
+  xs_train = np.array([x[0] for x in ex_train])
+  ys_train = np.array([x[1] for x in ex_train])
+
+  img_final = m.build_img(imgnames(1)[189])['source']
+  cen_final = m.build_cen(cennames(1)[189])['cen']
+  cen_final = np_utils.to_categorical(cen_final).reshape(cen_final.shape + (-1,))
+
+  img_mid = m.build_img(imgnames(1)[95])['source']
+  cen_mid = m.build_cen(cennames(1)[95])['cen']
+  cen_mid = np_utils.to_categorical(cen_mid).reshape(cen_mid.shape + (-1,))
+
+  img_zero = m.build_img(imgnames(1)[0])['source']
+  cen_zero = m.build_cen(cennames(1)[0])['cen']
+  cen_zero = np_utils.to_categorical(cen_zero).reshape(cen_zero.shape + (-1,))
+
+  imgs = fromlocals(locals(),['img_final','cen_final','img_mid','cen_mid','img_zero','cen_zero'])
+  scores = []
+  scoresbig = []
+  current_best = -1
+
+  callbackdata = fromlocals(locals(),['xs_train','ys_train','scores','current_best','imgs','scoresbig'])
+  return callbackdata
+
+def cbd_to_cb(callbackdata, rawdata, funcs):
+  cbd = callbackdata
+  out_channels = rawdata['train'][0]['target'].shape[-1]
+  def epochend_callback(net,epoch):
+
+    funcs['f_custom'](net,epoch)
+
+    ## predict on training examples
+    yp_train = net.predict(cbd['xs_train'], batch_size=1)
+    score_patch = funcs['f_match1'](cbd['ys_train'],yp_train)
+    cbd['scores'].append(fromlocals(locals(), ['epoch','score_patch']))
+    ## show them
+    xs = cbd['xs_train'][...,rawdata['xrgb']]
+    ys = cbd['ys_train'][...,rawdata['yrgb']]
+    yp = yp_train[...,rawdata['yrgb']]
+    res = clanalyze.plotlist([xs,ys,yp],1,c=1) #min(xs.shape[0],1))
+    io.imsave(rawdata['epochdir'] / 'train_{:03d}.png'.format(epoch), res)
+
+    ## predict on large images (final timepoint) and save weights
+    imgs = cbd['imgs']      
+    if epoch % 5 == 0:
+      pimg_final  = clanalyze.predict(net, imgs['img_final'][None],out_channels)
+      score_final = funcs['f_match2'](imgs['cen_final'][None], pimg_final)
+      # pimg_mid    = clanalyze.predict(net, imgs['img_mid'][None],out_channels)
+      # score_mid   = rawdata['f_match'](imgs['cen_mid'][None], pimg_mid)
+      # pimg_zero   = clanalyze.predict(net, imgs['img_zero'][None],out_channels)
+      # score_zero  = rawdata['f_match'](imgs['cen_zero'][None], pimg_zero)
+      cbd['scoresbig'].append(fromlocals(locals(),['epoch','score_final']))
+
+      if score_final > cbd['current_best']:
+        modelname = rawdata['epochdir'] / 'w_match_{:.3f}_{:03d}.h5'.format(score_final, epoch)
+        net.save_weights(str(modelname))
+        cbd['current_best'] = score_final
+        cbd['best_model'] = modelname
+
+  return epochend_callback
+
+def plot_callback(callbackdata,epochdir):
+  plt.figure()
+  # epochdir = callbackdata['epochdir']
+
+  epochs = [d['epoch'] for d in callbackdata['scores']]
+  scores = [d['score_patch'] for d in callbackdata['scores']]
+  plt.plot(epochs, scores, label='patch')
+
+  epochs = [d['epoch'] for d in callbackdata['scoresbig']]
+  scores = [d['score_final'] for d in callbackdata['scoresbig']]
+  plt.plot(epochs, scores, label='final')
+
+  plt.legend()
+  plt.savefig(epochdir / 'callback_traj.pdf')
+
+## train models
+
+def train_model(traindata):
+  raw = traindata['raw']
+
+  net = m.build_net(raw['netparams'])
+  # net.load_weights('training/ce_test6/train_cp/w072_final.h5')
+
+  tg = m.datagen(raw['train'],patch_size=(80,80,80),batch_size=4)
+  vg = m.datagen(raw['vali'],patch_size=(120,120,120),batch_size=1)
+
+  callback = traindata['callback']
+  callbackdata = raw['callbackdata']
+  callbackdata['scores'] = []
+  callbackdata['scoresbig'] = []
+  history = ts.train_gen(net, tg, vg, raw['traindir'], n_epochs=120, steps_per_epoch=30, vali_steps=5, callbacks=[callback])
+
+  ts.plot_history(history, start=1, savepath=raw['traindir'])
+  pickle.dump(callbackdata, open(str(raw['epochdir'] / 'callbackdata.pkl'),'wb'))
+  plot_callback(callbackdata, raw['epochdir'])
+  if callbackdata.get('best_model',None) is not None:
+    net.load_weights(str(callbackdata['best_model']))
+
+  res = fromlocals(locals(),['net','history','tg','vg'])
   return res
+
+def continuetrain(traindata, res):
+  net = res['net']
+  tg  = res['tg']
+  vg  = res['vg']
+  traindir = traindata['raw']['traindir']
+  callbackdata = traindata['raw']['callbackdata']
+
+  callback = traindata['callback']
+  history  = ts.train_gen(net, tg, vg, traindir, n_epochs=4, steps_per_epoch=30, vali_steps=10, callbacks=[callback])
+  
+  oldhist = res['history']
+  for k in ['loss','val_loss','met0','val_met0','met1','val_met1']:
+    oldhist[k].extend(history[k])
+
+  ts.plot_history(history, start=1, savepath=traindir)
+  plot_callback(callbackdata,traindata['raw']['epochdir'])
+  net.load_weights(str(callbackdata['best_model']))
 
 ## move
 
