@@ -1,4 +1,33 @@
 from clbase import *
+import cltrain as m
+
+
+## do everything
+
+def analyze(traindir,raw,net):
+  resultdir = traindir / 'results/'; resultdir.mkdir(exist_ok=True);
+  pimgdir   = traindir / 'pimgs/'; pimgdir.mkdir(exist_ok=True);
+
+  results = analyze_cpnet(net,raw,resultdir)
+  pickle.dump(results, open(resultdir / 'results.pkl', 'wb'))
+
+  rawgt = build_gt_rawdata()
+  results_gt = analyze_cpnet(net,rawgt,resultdir)
+  pickle.dump(results_gt, open(resultdir / 'results_gt.pkl', 'wb'))
+
+  # results_gt = pickle.load(open(resultdir / 'results_gt.pkl', 'rb'))
+  gtdata = labnames2imgs_cens(labnames(1),1)
+  mk_hyps_compute_seg(gtdata, results_gt)
+
+  imgdir = Path('Fluo-N3DH-CE/')
+  chaldir = Path('Fluo-N3DH-CE_challenge/')
+  if False:
+    save_pimgs(net,pimgdir / 'train1', imgdir / '01', range(0,250))
+    save_pimgs(net,pimgdir / 'train2', imgdir / '02', range(0,250))
+    save_pimgs(net,pimgdir / 'chall1', chaldir / '01', range(0,190))
+    save_pimgs(net,pimgdir / 'chall2', chaldir / '02', range(0,190))
+
+## build data
 
 def build_gtdata():
   "{1,2} x [1..5] x {img,cen,lab,t,z,z2,labname}"
@@ -101,7 +130,6 @@ def evalseg(d, params, savedir):
     io.imsave(savedir2 / "img{:03d}.png".format(d['t']), out)
     # print(params, seg, n_gt)
   return seg, n_gt, n_hyp
-
 
 def seg_compare2gt_rgb(hyp,img,lab=None,norm=False,clip=False):
   "takes 2d slices [no channels] and makes rgb"
@@ -259,13 +287,17 @@ def plot_cell_count_v_thresh(pimg,filename):
   return x,ys
 
 def match_ratio_from_ytyp(yt,yp):
-  # w  = yt[...,-1]
-  # yt = yt[...,:-1]
-  # print(yt.shape,yp.shape)
-  # yt = yt.eval()
-  # yp = yp.eval()
   pts0 = cen2pts(yt[...,1])
   pts1 = cen2pts(yp[...,1]>0.6)
+  if pts1.shape[0] > 0:
+    n,dists = n_matchpoints(pts1,pts0,k=1,dub=7)
+    m = (dists>0) & (dists<30)
+    distmean = np.mean(dists[m])
+  else:
+    n,distmean = 0, 0
+  return n, pts0.shape[0], pts1.shape[0], distmean
+
+def match_ratio_from_pts(pts0,pts1):
   if pts1.shape[0] > 0:
     n,dists = n_matchpoints(pts1,pts0,k=1,dub=7)
     m = (dists>0) & (dists<30)
@@ -282,6 +314,24 @@ def cen2pts(cen):
 
 ## rendering
 
+def pallettes_from_pimgs(img_pimg_names):
+  "list of tuples of filenames. returns y*x*3 rgb ndarray of segmented dataset."
+  a,b,c = imread(img_pimg_names[0][1]).shape
+  zs = np.linspace(10,a-10,11).astype(np.int)
+  png = np.zeros((len(img_pimg_names),len(zs),b,c,3))
+  params = segmentation.segment_pimg_img_params
+  for ti,xy in enumerate(img_pimg_names):
+    img = m.build_img(xy[0])['source']
+    pimg = imread(xy[1])
+    hyp = segmentation.segment_pimg_img({"img":img,"pimg":pimg}, params)
+    for zi,z in enumerate(zs):
+      # _,mi,ma = norm_szyxc(img[z,...,0],(0,1),return_pc=True)
+      png[ti,zi] = clanalyze.seg_compare2gt_rgb(hyp[z], img[z,...,0]) #*(ma-mi) + mi
+      # optional norm?
+  png = collapse2(png,"tzyxc","ty,zx,c")
+  png = norm_szyxc(png,(0,1,2))
+  return png
+
 def show_rawdata(rawdata_train, pimg=None, i=1):
   xrgb = [0,0,0]
   yrgb = [1,1,1]
@@ -296,6 +346,20 @@ def show_rawdata(rawdata_train, pimg=None, i=1):
     return collapse2(szyxc,"szyxc",perm[i-1])[::10]
   res = plotlist(lzt,i,c=3,mid=mid)
   return res
+
+def save_pimgs2(net, savedir, imgnames):
+  savedir.mkdir(exist_ok=True)
+  counts = []
+  for name in imgnames:
+    img  = m.build_img(name)['source']
+    pimg = predict(net, img[None], outchan=2)
+    pimg = pimg[0,...,1].astype(np.float16)
+    p = Path(name)
+    imsave(str(savedir / ('pimg_' + p.name)), pimg)
+    counts.append((name, label(pimg>0.6)[1]))
+  print(counts)
+  print(counts, file=open(savedir / 'counts.txt','w'))
+  return counts
 
 def save_pimgs(net, savedir, imgdir, times):
   savedir.mkdir(exist_ok=True)
@@ -507,7 +571,7 @@ def predict(net,img,outchan=1):
   # borders = [0,4,0,0]
   # patchshape_padded = [1,24,400,400]
   # borders = xsem['borders']
-  borders = (0,50,50,50)
+  borders = (0,10,10,10)
   # patchshape_padded = list(xsem['patchsize'])
   patchshape_padded = [1,120,120,120]
   # patchshape_padded[2] = 400
@@ -523,7 +587,7 @@ def predict(net,img,outchan=1):
     s1 = patches['slices_padded'][i]
     s3 = patches['slices_valid'][i]
     x = img[s1]
-    x = x / x.mean((1,2,3), keepdims=True)
+    # x = x / x.mean((1,2,3), keepdims=True)
     # x = collapse2(x, 'szyxc','s,y,x,zc')
     container[s3] = net.predict(x)[s2]
 

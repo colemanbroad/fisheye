@@ -25,7 +25,7 @@ from sklearn.mixture import GaussianMixture
 
 from pykdtree.kdtree import KDTree as pyKDTree
 
-from skimage.morphology import disk         
+from skimage.morphology import disk
 from skimage.filters import threshold_otsu, rank
 
 import segmentation
@@ -33,6 +33,9 @@ import segmentation
 ## testing segmentations against GT
 
 ## load challenge GT data
+
+spimdir = "/net/fileserver-nfs/stornext/snfs2/projects/myersspimdata/"
+greencarpet = "/net/fileserver-nfs/stornext/snfs4/projects/green-carpet/"
 
 seg1 = "/net/fileserver-nfs/stornext/snfs2/projects/myersspimdata/Coleman/Celegans/ISBI/Fluo-N3DH-CE_challenge/01/SEG"
 seg2 = "/net/fileserver-nfs/stornext/snfs2/projects/myersspimdata/Coleman/Celegans/ISBI/Fluo-N3DH-CE_challenge/02/SEG"
@@ -79,6 +82,9 @@ def labnames(n):
 def imgnames(n,base='Fluo-N3DH-CE'):
   return sorted(glob(str(Path(base) / '{:02d}/t???.tif'.format(n))))
 
+def challnames(n,base='Fluo-N3DH-CE_challenge'):
+  return sorted(glob(str(Path(base) / '{:02d}/t???.tif'.format(n))))
+
 def cennames(n,base='Fluo-N3DH-CE'):
   return sorted(glob(str(Path(base) / '{:02d}_GT/TRA/man_track???.tif'.format(n))))
 
@@ -106,6 +112,12 @@ def updatekeys(d1,d2,keys):
   for k in keys:
     d1[k] = d2[k]
   return d1
+
+def fromlocals(_locals,keys):
+  d = dict()
+  for k in keys:
+    d[k] = _locals[k]
+  return d
 
 
 ## normalization

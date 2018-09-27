@@ -2,13 +2,60 @@ from segtools.defaults.ipython_remote import *
 import cltrain as m
 import clanalyze
 from clbase import *
-# import clipy as c
-
 homedir = Path("training/ce_test6")
 savedir = Path("training/ce_test6")
+# import clipy as c
 
 
 
+def do_it_all_classifier():
+  pass
+
+def load_old_and_reanalyze():
+  # raw = buildraw()
+  # step1()
+  step2()
+
+def step1():
+  traindir = Path('training/ce_test5/train_cp/')
+  net = net = m.build_net((120,120,120,1), 2, activation='softmax')
+  net.load_weights('training/ce_test5/train_cp/epochs/w_match_0.952_097.h5')
+  ## do em all
+  clanalyze.save_pimgs2(net,traindir / "t1",imgnames(1)[::20])
+  clanalyze.save_pimgs2(net,traindir / "t2",imgnames(2)[::20])
+  clanalyze.save_pimgs2(net,traindir / "c1",challnames(1)[::20])
+  clanalyze.save_pimgs2(net,traindir / "c2",challnames(2)[::20])
+
+def step2():
+  traindir = Path('training/ce_test5/train_cp/')
+  names1 = imgnames(1)[::20]
+  names2 = sorted(glob(str(traindir / "t1" / "*.tif")))
+  xy = list(zip(names1, names2))
+  png = pallettes_from_pimgs(xy)
+  io.imsave(str(traindir / 't1.png'),png)
+
+  names1 = imgnames(2)[::20]
+  names2 = sorted(glob(str(traindir / "t2" / "*.tif")))
+  xy = list(zip(names1, names2))
+  png = pallettes_from_pimgs(xy)
+  io.imsave(str(traindir / 't2.png'),png)
+
+  names1 = challnames(1)[::20]
+  names2 = sorted(glob(str(traindir / "c1" / "*.tif")))
+  xy = list(zip(names1, names2))
+  png = pallettes_from_pimgs(xy)
+  io.imsave(str(traindir / 'c1.png'),png)
+
+  names1 = challnames(2)[::20]
+  names2 = sorted(glob(str(traindir / "c2" / "*.tif")))
+  xy = list(zip(names1, names2))
+  png = pallettes_from_pimgs(xy)
+  io.imsave(str(traindir / 'c2.png'),png)
+
+  # pallettes_from_net(datasets['t1'],net,traindir)
+  # pallettes_from_net(datasets['t2'],net,traindir)
+  # pallettes_from_net(datasets['c1'],net,traindir)
+  # pallettes_from_net(datasets['c2'],net,traindir)
 
 def trainkernels():
   bt = base_train
@@ -211,20 +258,60 @@ def mvfiles():
 
 ## for training
 
-def buildraw():
-  times    = [70,80,130,160,180,189,189]
-  ns       = [1,1,2,1,1,2,1]
+def bugfixraw():
+  times    = [130]
+  ns       = [1]
   basedirs = ['Fluo-N3DH-CE']*len(ns)
   
   icp = imgcenpairs({'times':times,'ns':ns,'bases':basedirs})
-  raw_train = m.icp2raw(icp,w=5)
+  raw_train = m.icp2raw(icp)
+  tar = raw_train[0]['target']
+  raw_train[0]['source'] = tar + 0.1 * np.random.rand(*tar.shape)
+
+  times    = [100]
+  ns       = [1]
+  basedirs = ['Fluo-N3DH-CE']*len(ns)
+  
+  icp = imgcenpairs({'times':times,'ns':ns,'bases':basedirs})
+  raw_vali = m.icp2raw(icp)
+  tar = raw_vali[0]['target']
+  raw_vali[0]['source'] = tar + 0.1 * np.random.rand(*tar.shape)
+
+  data = {'train':raw_train,'vali':raw_vali}
+  return data
+
+def simpleraw(targetfunc):
+  times    = [130]
+  ns       = [1]
+  basedirs = ['Fluo-N3DH-CE']*len(ns)
+  
+  icp = imgcenpairs({'times':times,'ns':ns,'bases':basedirs})
+  raw_train = m.icp2raw(icp, targetfunc)
+
+  times    = [100]
+  ns       = [1]
+  basedirs = ['Fluo-N3DH-CE']*len(ns)
+  
+  icp = imgcenpairs({'times':times,'ns':ns,'bases':basedirs})
+  raw_vali = m.icp2raw(icp, targetfunc)
+
+  data = {'train':raw_train,'vali':raw_vali}
+  return data
+
+def buildraw(targetfunc):
+  times    = [0,100,150,175,189,189]
+  ns       = [2,1,2,1,2,1]
+  basedirs = ['Fluo-N3DH-CE']*len(ns)
+  
+  icp = imgcenpairs({'times':times,'ns':ns,'bases':basedirs})
+  raw_train = m.icp2raw(icp, targetfunc)
 
   times    = [70,185,185]
   ns       = [1,1,2]
   basedirs = ['Fluo-N3DH-CE']*len(ns)
   
   icp = imgcenpairs({'times':times,'ns':ns,'bases':basedirs})
-  raw_vali = m.icp2raw(icp,w=5)
+  raw_vali = m.icp2raw(icp, targetfunc)
 
   data = {'train':raw_train,'vali':raw_vali}
   return data
@@ -234,49 +321,213 @@ def showraw(raw,savedir):
     res = clanalyze.show_rawdata(raw['vali'],i=i)
     io.imsave(savedir / 'rawdata_vali_{:02d}.png'.format(i), res)
 
-def doitall(rawdata,savedir):
-  traindir  = savedir  / 'train_cp/'; traindir.mkdir(exist_ok=True);
-  epochdir  = traindir / 'epochs/'; epochdir.mkdir(exist_ok=True);
+def matching_2cen(cen,pimg,th):
+  print(pimg.mean(),np.percentile(pimg,[2,50,90,99]))
+  x = clanalyze.cen2pts(cen)
+  y = clanalyze.cen2pts(pimg[0,...,0] > th)
+  kdt = pyKDTree(y)
+  dists, inds = kdt.query(x, k=1, distance_upper_bound=100)
+  indices,counts = np.unique(inds[inds<len(y)],return_counts=True)
+  return x,y,indices,counts
+
+def a():
+  print(x.shape,y.shape)
+  g3 = graphmatch.connect_points_digraph_symmetric(x,y,k=1,dub=100)
+  return g3
+
+def matching_func_gauss(yt,yp):
+  pts0 = clanalyze.cen2pts(yt[...,0]>0.8)
+  pts1 = clanalyze.cen2pts(yp[...,0]>0.8)
+  # kdt = pyKDTree(y)
+  # dists, inds = kdt.query(x, k=k, distance_upper_bound=dub)
+  g3 = graphmatch.connect_points_symmetric(pts0,pts1,k=1,dub=100)
+  return g3
+
+def match_class(yts,yps):
+  "Samples ZYX C"
+  print(yts.shape,yps.shape)
+  def single(yt,yp):
+    pts0 = clanalyze.cen2pts(yt[...,1]>0.5)
+    pts1 = clanalyze.cen2pts(yp[...,1]>0.8)
+    g3 = graphmatch.connect_points_symmetric(pts0,pts1,k=1,dub=100)
+    return len(g3.edges())/len(g3.nodes())
+  return np.mean([single(yt,yp) for yt,yp in zip(yts,yps)])
+
+def train_classifier(rawdata,savedir):
+  traindir = savedir  / 'train_cp/'; traindir.mkdir(exist_ok=True);
+  epochdir = traindir / 'epochs/'; epochdir.mkdir(exist_ok=True);
 
   weights = np.array([1,1])
   weights[1] = 16.0
+  # weights[2] = 16.0
   weights = weights / weights.sum()
   weights = K.variable(weights)
+  weight_decay = [2,1] #,.8]
 
-  net = m.build_net((120,120,120,1), 2, activation='softmax', weights=weights)
+  out_channels = rawdata['train'][0]['target'].shape[-1]
+  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'softmax', 'task':'classification', 'weights':weights, 'lr':1e-4}
+  net = m.build_net(netparams)
+  # net.load_weights('training/ce_test6/train_cp/w072_final.h5')
+
+  tg  = m.datagen(rawdata['train'],patch_size=(48,48,48),batch_size=16)
+  vg  = m.datagen(rawdata['vali'], patch_size=(120,120,120),batch_size=1)
+
+  def build_callbackdata():
+    # ex_vali  = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 5)]
+    tg2 = m.datagen(rawdata['train'],patch_size=(120,120,120),batch_size=1)
+    ex_train = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(tg2, 5)]
+    xs_train = np.array([x[0] for x in ex_train])
+    ys_train = np.array([x[1] for x in ex_train])
+
+    xrgb = [0,0,0]
+    yrgb = [1,1,1]
+
+    img_final = m.build_img(imgnames(1)[189])['source']
+    cen_final = m.build_cen(cennames(1)[189])['cen']
+    cen_final = np_utils.to_categorical(cen_final).reshape(cen_final.shape + (-1,))
+
+    scores = []
+
+    callbackdata = fromlocals(locals(),['xs_train','ys_train','xrgb','yrgb','scores','img_final','cen_final'])
+    return callbackdata
+
+  def cbd_to_cb(callbackdata):
+    cbd = callbackdata
+    def epochend_callback(net,epoch):
+
+      ## update class weights
+      w = K.get_value(weights)
+      print(w, w.shape)
+      if (epoch % 1 == 0) and epoch > 0 and w[1]>(1/len(w)):
+        w = w * weight_decay
+        w = w / w.sum()
+        print(w,w.shape)
+        K.set_value(weights,w)
+
+      ## predict on training examples
+      yp_train = net.predict(cbd['xs_train'], batch_size=1)
+      score_patch = match_class(cbd['ys_train'],yp_train)
+      pimg_final  = clanalyze.predict(net, cbd['img_final'][None],2)
+      score_final = match_class(cbd['cen_final'][None], pimg_final)
+
+      scores.append(fromlocals(locals(), ['epoch','score_patch','score_final']))
+
+      # if len(tvs['matching_score'])==0 or score > max(tvs['matching_score']) and trainvali=='vali':
+      #   modelname = savedir / 'w_match_{:.3f}_{:03d}.h5'.format(score, epoch)
+      #   model.save_weights(str(modelname))
+      #   stuff['bestmodel'] = modelname
+      # tvs['matching_score'].append(score)
+
+      ## show them
+      xs = cbd['xs_train'][...,xrgb]
+      ys = cbd['ys_train'][...,yrgb]
+      yp = yp_train[...,yrgb]
+      res = clanalyze.plotlist([xs,ys,yp],1,c=1) #min(xs.shape[0],1))
+      io.imsave(savedir / 'train_{:03d}.png'.format(epoch), res)
+    return epochend_callback
+
+  callbackdata = build_callbackdata()
+  epochend_callback = cbd_to_cb(callbackdata)
+  callback = m.GlobalCallback(epochend_callback)
+  history = ts.train_gen(net, tg, vg, traindir, n_epochs=2, steps_per_epoch=15, vali_steps=5, callbacks=[callback])
+
+  ts.plot_history(history, start=1, savepath=traindir)
+  # plot_callback(callbackdata)
+  # if callbackdata.get('bestmodel',None) is not None:
+  #   net.load_weights(str(callbackdata['bestmodel']))
+  #   net.save_weights(savedir / 'model_best.net')
+
+  res = fromlocals(locals(),['net','history','tg','vg','savedir','traindir','callbackdata'])
+  return res
+
+def train_regressor(rawdata,savedir):
+  traindir = savedir  / 'train_cp/'; traindir.mkdir(exist_ok=True);
+  epochdir = traindir / 'epochs/'; epochdir.mkdir(exist_ok=True);
+
+  weights = np.array([1,1])
+  weights[1] = 16.0
+  # weights[2] = 16.0
+  weights = weights / weights.sum()
+  weights = K.variable(weights)
+  weight_decay = [2,1] #,.8]
+
+  out_channels = rawdata['train'][0]['target'].shape[-1]
+  # netparams = {'inshape':(120,120,120,1), 'out_channels':out_channels, 'activation':'softmax', 'task':'classification', 'weights':weights, 'lr':1e-4}
+  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'linear', 'task':'regression', 'lr':5e-4}
+  net = m.build_net(netparams)
+  # net.load_weights('training/ce_test6/train_cp/w072_final.h5')
+
+  # net = m.build_net((120,120,120,1), 2, activation='softmax', weights=weights)
   # net.load_weights('/projects/project-broaddus/fisheye/training/ce_059/train_cp/epochs/w_match_0.935_132.h5')
 
-  tg = m.datagen(rawdata['train'])
-  vg = m.datagen(rawdata['vali'])
-  examples = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 20)]
+  tg = m.datagen(rawdata['train'],patch_size=(48,48,48),batch_size=16)
+  tg2 = m.datagen(rawdata['train'],patch_size=(120,120,120),batch_size=1)
+  vg = m.datagen(rawdata['vali'],patch_size=(120,120,120),batch_size=1)
+  ex_vali = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(vg, 5)]
+  ex_train = [(x[0],y[0,...,:-1]) for (x,y) in itertools.islice(tg2, 5)]
+  xrgb = [0,0,0]
+  yrgb = [0,0,0]
 
-  hical = m.Histories(examples, epochdir, weights=weights)
+  source = m.build_img(imgnames(1)[189])['source']
+  cen = m.build_cen(cennames(1)[189])['cen']
 
-  history = ts.train_gen(net, tg, vg, traindir, n_epochs=100, steps_per_epoch=30, vali_steps=2, callbacks=[hical])
+  callbackdata = fromlocals(locals(),['ex_train','ex_vali','xrgb','yrgb','epochdir','matching_func','matching_2cen'])
+  callbackdata = updatekeys(callbackdata, locals(), ['source','cen','out_channels'])
+  callback = m.GlobalCallback(callbackdata)
+
+  history = ts.train_gen(net, tg, vg, traindir, n_epochs=2, steps_per_epoch=15, vali_steps=5, callbacks=[callback])
+
   ts.plot_history(history, start=1, savepath=traindir)
-  net.load_weights(str(hical.bestmodel))
+  plot_callback(callbackdata)
+  if callbackdata.get('bestmodel',None) is not None:
+    net.load_weights(str(callbackdata['bestmodel']))
+    net.save_weights(savedir / 'model_best.net')
 
-  res = updatekeys(dict(),locals(),['net','hical','history'])
+  res = fromlocals(locals(),['net','history','tg','vg','savedir','traindir','callbackdata'])
   return res
+
+def plot_callback(callbackdata):
+  plt.figure()
+  for k in ['train_matching_score', 'val_matching_score', 'stack_scores',]:
+    plt.plot(callbackdata[k], label=k)
+  plt.legend()
+  plt.savefig(callbackdata['epochdir'] / 'callback_traj.pdf')
+
+def continuetrain(res):
+  net = res['net']
+  tg = res['tg']
+  vg = res['vg']
+  traindir = res['traindir']
+  callbackdata = res['callbackdata']
+
+  callback = m.GlobalCallback(res['callbackdata'])
+  history  = ts.train_gen(net, tg, vg, traindir, n_epochs=30, steps_per_epoch=30, vali_steps=10, callbacks=[callback])
+  
+  ts.plot_history(history, start=1, savepath=traindir)
+  plot_callback(callbackdata)
+  net.load_weights(str(callbackdata['bestmodel']))
+  return res
+
+## move
 
 def analyze(traindir,raw,net):
   resultdir = traindir / 'results/'; resultdir.mkdir(exist_ok=True);
   pimgdir   = traindir / 'pimgs/'; pimgdir.mkdir(exist_ok=True);
 
-  results = clanalyze.analyze_cpnet(net,rawdata,resultdir)
+  results = analyze_cpnet(net,raw,resultdir)
   pickle.dump(results, open(resultdir / 'results.pkl', 'wb'))
 
-  rawgt = clanalyze.build_gt_rawdata()
-  results_gt = clanalyze.analyze_cpnet(net,rawgt,resultdir)
+  rawgt = build_gt_rawdata()
+  results_gt = analyze_cpnet(net,rawgt,resultdir)
   pickle.dump(results_gt, open(resultdir / 'results_gt.pkl', 'wb'))
 
   # results_gt = pickle.load(open(resultdir / 'results_gt.pkl', 'rb'))
   gtdata = labnames2imgs_cens(labnames(1),1)
-  clanalyze.mk_hyps_compute_seg(gtdata, results_gt)
+  mk_hyps_compute_seg(gtdata, results_gt)
 
   imgdir = Path('Fluo-N3DH-CE/')
   chaldir = Path('Fluo-N3DH-CE_challenge/')
-  clanalyze.save_pimgs(net,pimgdir / 'train1', imgdir / '01', range(0,250))
-  clanalyze.save_pimgs(net,pimgdir / 'train2', imgdir / '02', range(0,250))
-  clanalyze.save_pimgs(net,pimgdir / 'chall1', chaldir / '01', range(0,190))
-  clanalyze.save_pimgs(net,pimgdir / 'chall2', chaldir / '02', range(0,190))
+  save_pimgs(net,pimgdir / 'train1', imgdir / '01', range(0,250))
+  save_pimgs(net,pimgdir / 'train2', imgdir / '02', range(0,250))
+  save_pimgs(net,pimgdir / 'chall1', chaldir / '01', range(0,190))
+  save_pimgs(net,pimgdir / 'chall2', chaldir / '02', range(0,190))

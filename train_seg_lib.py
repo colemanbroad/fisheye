@@ -472,8 +472,8 @@ def plot_history(history, start=0, savepath=None):
   def plot_hist_key(k):
     plt.figure()
     y1 = history[k]
-    y2 = history['val_' + k]
     plt.plot(y1[start:], label=k)
+    y2 = history['val_' + k]
     plt.plot(y2[start:], label='val_' + k)
     plt.legend()
     if savepath:
@@ -482,10 +482,7 @@ def plot_history(history, start=0, savepath=None):
   for k in keys:
     if 'val_'+k in keys:
       plot_hist_key(k)
-
-
-
-
+    
 
 ## run-style functions requiring
 
