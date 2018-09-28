@@ -2,8 +2,6 @@ from segtools.defaults.ipython_remote import *
 import cltrain as m
 import clanalyze
 from clbase import *
-homedir = Path("training/ce_test6")
-savedir = Path("training/ce_test6")
 # import clipy as c
 
 
@@ -260,6 +258,10 @@ def showraw(raw,savedir):
     res = clanalyze.show_rawdata(raw['vali'],i=i)
     io.imsave(savedir / 'rawdata_vali_{:02d}.png'.format(i), res)
 
+
+
+
+
 ## matching scores
 
 def matching_2cen(cen,pimg,th):
@@ -277,32 +279,44 @@ def match_chan(yts,yps,chs=(1,1)):
   def single(yt,yp):
     pts0 = clanalyze.cen2pts(yt[...,chs[0]]>0.5)
     pts1 = clanalyze.cen2pts(yp[...,chs[1]]>np.percentile(yp[...,chs[1]],98))
-    return len(pts1)
-  return np.mean([single(yt,yp) for yt,yp in zip(yts,yps)])
+    # print(pts0)
+    # print()
+    # print(pts1)
+    # ipdb.set_trace()
+    if len(pts1) > 0:
+      kdt = pyKDTree(pts1)
+      dists, inds = kdt.query(pts0, k=1, distance_upper_bound=10)
+      uinds,counts = np.unique(inds[inds<len(pts1)], return_counts=True)
+      return len(uinds), len(pts1), len(pts0)
+    return 0,len(pts1),len(pts0)
+  scores = np.array([single(yt,yp) for yt,yp in zip(yts,yps)])
+  f1 = 2*scores[:,0].sum() / scores[:,[1,2]].sum()
+  return f1
 
+## train multiple models consecutively
 
 def run_many():
-  for w in [3,5,7,9]:
+  for w in [3,5]:
     np.random.seed(0)
-    savedir = Path('training/ce_run/class/w{:d}/'.format(w))
-    traindata = build_raw_class(savedir,w)
+    savedir = Path('training/ce_run4/class/w{:d}/'.format(w))
+    traindata = build_raw_class(savedir,buildraw,w)
     res = train_model(traindata)
 
     np.random.seed(0)
-    savedir = Path('training/ce_run/gauss/w{:d}/'.format(w))
-    traindata = build_raw_gauss(savedir,w)
+    savedir = Path('training/ce_run4/gauss/w{:d}/'.format(w))
+    traindata = build_raw_gauss(savedir,buildraw,w)
+    # traindata['raw']['params0'] = 'training/ce_run2/gauss/w3/train_cp/w007.h5'
     res = train_model(traindata)
-
 
 ## for training
 
-def bugfixraw():
+def bugfixraw(targetfunc):
   times    = [130]
   ns       = [1]
   basedirs = ['Fluo-N3DH-CE']*len(ns)
   
   icp = imgcenpairs({'times':times,'ns':ns,'bases':basedirs})
-  raw_train = m.icp2raw(icp)
+  raw_train = m.icp2raw(icp,targetfunc)
   tar = raw_train[0]['target']
   raw_train[0]['source'] = tar + 0.1 * np.random.rand(*tar.shape)
 
@@ -311,7 +325,7 @@ def bugfixraw():
   basedirs = ['Fluo-N3DH-CE']*len(ns)
   
   icp = imgcenpairs({'times':times,'ns':ns,'bases':basedirs})
-  raw_vali = m.icp2raw(icp)
+  raw_vali = m.icp2raw(icp,targetfunc)
   tar = raw_vali[0]['target']
   raw_vali[0]['source'] = tar + 0.1 * np.random.rand(*tar.shape)
 
@@ -354,11 +368,13 @@ def buildraw(targetfunc):
   data = {'train':raw_train,'vali':raw_vali}
   return data
 
-def build_raw_class(savedir,w):
+## combine rawdata, callback data and net params
+
+def build_raw_class(savedir,f_rawbuild,w):
   # targetfunc = m.cen2target_class
   xrgb = [0,0,0]
   yrgb = [1,1,1]
-  raw = simpleraw(lambda x: m.cen2target_class(x,w))
+  raw = f_rawbuild(lambda x: m.cen2target_class(x,w))
   updatekeys(raw,locals(),['xrgb','yrgb'])
   
   weights = np.array([1,1])
@@ -392,21 +408,20 @@ def build_raw_class(savedir,w):
     funcs = fromlocals(locals(),['f_custom','f_match1','f_match2'])
     epochend_callback = cbd_to_cb(callbackdata,raw,funcs)
     callback = m.GlobalCallback(epochend_callback)
-    raw['callbackdata'] = callbackdata
 
   out_channels = raw['train'][0]['target'].shape[-1]
-  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'softmax', 'task':'classification', 'weights':weights, 'lr':2e-4}
+  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'softmax', 'task':'classification', 'weights':weights, 'lr':1e-4}
   raw['netparams'] = netparams
 
-  data = {'raw':raw,'callback':callback}
+  data = fromlocals(locals(), ['raw','callback','callbackdata'])
 
   return data
 
-def build_raw_gauss(savedir,w):
+def build_raw_gauss(savedir,f_rawbuild,w):
   # targetfunc = m.cen2target_class
   xrgb = [0,0,0]
   yrgb = [0,0,0]
-  raw = simpleraw(lambda x : m.cen2target_gauss(x,w=w))
+  raw = f_rawbuild(lambda x : m.cen2target_gauss(x,w=w))
   updatekeys(raw,locals(),['xrgb','yrgb'])
   
   ## callback stuff
@@ -428,13 +443,12 @@ def build_raw_gauss(savedir,w):
     funcs = fromlocals(locals(),['f_custom','f_match1','f_match2'])
     epochend_callback = cbd_to_cb(callbackdata,raw,funcs)
     callback = m.GlobalCallback(epochend_callback)
-    raw['callbackdata'] = callbackdata
 
   out_channels = raw['train'][0]['target'].shape[-1]
-  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'linear', 'task':'regression', 'lr':2e-4}
+  netparams = {'inshape':(None,None,None,1), 'out_channels':out_channels, 'activation':'linear', 'task':'regression', 'lr':1e-4}
   raw['netparams'] = netparams
 
-  data = {'raw':raw,'callback':callback}
+  data = fromlocals(locals(), ['raw','callback','callbackdata'])
 
   return data
 
@@ -484,12 +498,14 @@ def cbd_to_cb(callbackdata, rawdata, funcs):
     yp = yp_train[...,rawdata['yrgb']]
     res = clanalyze.plotlist([xs,ys,yp],1,c=1) #min(xs.shape[0],1))
     io.imsave(rawdata['epochdir'] / 'train_{:03d}.png'.format(epoch), res)
-
+    print("cp1")
     ## predict on large images (final timepoint) and save weights
     imgs = cbd['imgs']      
     if epoch % 5 == 0:
+      print("predict on final...")
       pimg_final  = clanalyze.predict(net, imgs['img_final'][None],out_channels)
       score_final = funcs['f_match2'](imgs['cen_final'][None], pimg_final)
+      print("successfully computed final scores...")
       # pimg_mid    = clanalyze.predict(net, imgs['img_mid'][None],out_channels)
       # score_mid   = rawdata['f_match'](imgs['cen_mid'][None], pimg_mid)
       # pimg_zero   = clanalyze.predict(net, imgs['img_zero'][None],out_channels)
@@ -502,11 +518,12 @@ def cbd_to_cb(callbackdata, rawdata, funcs):
         cbd['current_best'] = score_final
         cbd['best_model'] = modelname
 
+    plot_callback(cbd,rawdata['traindir'])
+
   return epochend_callback
 
-def plot_callback(callbackdata,epochdir):
+def plot_callback(callbackdata,traindir):
   plt.figure()
-  # epochdir = callbackdata['epochdir']
 
   epochs = [d['epoch'] for d in callbackdata['scores']]
   scores = [d['score_patch'] for d in callbackdata['scores']]
@@ -517,7 +534,7 @@ def plot_callback(callbackdata,epochdir):
   plt.plot(epochs, scores, label='final')
 
   plt.legend()
-  plt.savefig(epochdir / 'callback_traj.pdf')
+  plt.savefig(traindir / 'callback_traj.pdf')
 
 ## train models
 
@@ -525,20 +542,21 @@ def train_model(traindata):
   raw = traindata['raw']
 
   net = m.build_net(raw['netparams'])
-  # net.load_weights('training/ce_test6/train_cp/w072_final.h5')
+  params0 = traindata['raw'].get('params0',None)
+  if params0:
+    net.load_weights(params0)
 
   tg = m.datagen(raw['train'],patch_size=(80,80,80),batch_size=4)
   vg = m.datagen(raw['vali'],patch_size=(120,120,120),batch_size=1)
 
-  callback = traindata['callback']
-  callbackdata = raw['callbackdata']
+  callbackdata = traindata['callbackdata']
   callbackdata['scores'] = []
   callbackdata['scoresbig'] = []
-  history = ts.train_gen(net, tg, vg, raw['traindir'], n_epochs=120, steps_per_epoch=30, vali_steps=5, callbacks=[callback])
+  history = ts.train_gen(net, tg, vg, raw['traindir'], n_epochs=60, steps_per_epoch=20, vali_steps=10, callbacks=[traindata['callback']])
 
   ts.plot_history(history, start=1, savepath=raw['traindir'])
-  pickle.dump(callbackdata, open(str(raw['epochdir'] / 'callbackdata.pkl'),'wb'))
-  plot_callback(callbackdata, raw['epochdir'])
+  pickle.dump(callbackdata, open(str(raw['traindir'] / 'callbackdata.pkl'),'wb'))
+  plot_callback(callbackdata, raw['traindir'])
   if callbackdata.get('best_model',None) is not None:
     net.load_weights(str(callbackdata['best_model']))
 
@@ -550,7 +568,7 @@ def continuetrain(traindata, res):
   tg  = res['tg']
   vg  = res['vg']
   traindir = traindata['raw']['traindir']
-  callbackdata = traindata['raw']['callbackdata']
+  callbackdata = traindata['callbackdata']
 
   callback = traindata['callback']
   history  = ts.train_gen(net, tg, vg, traindir, n_epochs=4, steps_per_epoch=30, vali_steps=10, callbacks=[callback])
@@ -560,7 +578,8 @@ def continuetrain(traindata, res):
     oldhist[k].extend(history[k])
 
   ts.plot_history(history, start=1, savepath=traindir)
-  plot_callback(callbackdata,traindata['raw']['epochdir'])
+  plot_callback(callbackdata,traindata['raw']['traindir'])
+  pickle.dump(callbackdata, open(str(raw['traindir'] / 'callbackdata.pkl'),'wb'))
   net.load_weights(str(callbackdata['best_model']))
 
 ## move

@@ -191,18 +191,20 @@ def build_net(shape_params):
     def loss(yt, yp):
       w  = yt[...,-1]
       yt = yt[...,:-1]
-      mse = losses.mean_squared_error(yt[...,0],yp[...,0])
-      cellcount = (K.mean(yt) - K.mean(yp))**2
+      # lo = losses.mean_squared_error(yt[...,0],yp[...,0])
+      lo = losses.mean_absolute_error(yt[...,0],yp[...,0])
+      # cellcount = (K.mean(yt) - K.mean(yp))**2
       # return mse # + 10.0 * cellcount
       # ce = losses.binary_crossentropy(yt[...,0],yp[...,0])
-      return mse
+      return lo
 
     def met0(yt, yp):
       w  = yt[...,-1]
       yt = yt[...,:-1]
       # return K.std(yp)
-      mae = losses.mean_absolute_error(yt[...,0],yp[...,0])
-      return mae
+      lo = losses.mean_squared_error(yt[...,0],yp[...,0])
+      # lo = losses.mean_absolute_error(yt[...,0],yp[...,0])
+      return lo
 
     def met1(yt,yp):
       w  = yt[...,-1]
