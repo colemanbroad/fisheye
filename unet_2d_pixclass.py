@@ -299,6 +299,10 @@ Full pimg predictions in predict are wack despite net training to 0.222 vali. Wh
 ## Thu Jul 26 11:53:10 2018
 
 Fixed normalization bug resulting in all-blue background predictions.
+Let's compare this vali = 0.222 result with the same number of epochs and patches, but
+let's change the normalization.
+
+
 
 """
 
