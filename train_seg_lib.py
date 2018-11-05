@@ -8,40 +8,39 @@ import pandas as pd
 from scipy.ndimage.filters import maximum_filter
 from scipy.ndimage.morphology import generate_binary_structure, binary_erosion
 
-
+ss = scores_dense
 
 ## utility functions (called internally)
 
-def detect_peaks(image):
-  """
-  Takes an image and detect the peaks usingthe local maximum filter.
-  Returns a boolean mask of the peaks (i.e. 1 when
-  the pixel's value is the neighborhood maximum, 0 otherwise)
-  """
+def broadcast_over_old(func, axes):
+  "broadcast over axes in CAPS"
+  N = len(axes)
+  M = len(subaxes)
+  if axes_full is None:
+    axes_full = axes2str(range(N))
+  subaxes = axes2str(subaxes)
+  newaxes = move_axes_to_end(axes_full, subaxes)
+  arr = perm(arr, axes_full, newaxes)
 
-  # define an 8-connected neighborhood
-  neighborhood = generate_binary_structure(3,3)
+  # res = np.empty(arr.shape[:N-M],np.ndarray)
 
-  #apply the local maximum filter; all pixel of maximal value 
-  #in their neighborhood are set to 1
-  local_max = maximum_filter(image, footprint=neighborhood)==image
-  #local_max is a mask that contains the peaks we are 
-  #looking for, but also the background.
-  #In order to isolate the peaks we must remove the background from the mask.
+def broadcast_over(func, overshape):
+  res = np.empty(overshape, np.ndarray)
+  for idx in np.ndindex(overshape):
+    res[idx] = func(idx).tolist()
+  res = np.array(res.tolist())
+  return res
+  # res = perm(res, newaxes, axes_full)
+  # return res
 
-  #we create the mask of the background
-  background = (image==0)
-
-  #a little technicality: we must erode the background in order to 
-  #successfully subtract it form local_max, otherwise a line will 
-  #appear along the background border (artifact of the local maximum filter)
-  eroded_background = binary_erosion(background, structure=neighborhood, border_value=1)
-
-  #we obtain the final mask, containing only peaks, 
-  #by removing the background from the local_max mask (xor operation)
-  detected_peaks = local_max ^ eroded_background
-
-  return detected_peaks
+def test_broad():
+  x = np.arange(4*5*6*7).reshape((4,5,6,7))
+  def f(idx):
+    print(idx)
+    a,b = idx
+    print(x[:,a,b,:].mean())
+    return x[:,a,b,:].mean()
+  return broadcast_over(f, (5,6))
 
 def random_augmentation_xy(xpatch, ypatch, train=True):
   if random.random()<0.5:
@@ -111,34 +110,87 @@ def segparams():
   res['params'] = segmentation_params
   res['space'] = segmentation_space
   res['info'] = segmentation_info
-  res['n_evals'] = 40 ## must be greater than 2 or hyperopt throws errors
+  res['n_evals'] = 10 ## must be greater than 2 or hyperopt throws errors
   res['blur'] = False
   return res
 
 ## utils n stuff
 
-def shuffle_split(xsysws):
+def show_trainvali(trainable, visuals, savepath):
+  xrgb = visuals['xrgb']
+  yrgb = visuals['yrgb']
+  plotlist = visuals['plotlist']
+
+  x1 = trainable['xs_train'][...,xrgb]
+  y1 = trainable['ys_train'][...,yrgb]
+  traindat = [x1,y1]
+
+  x2 = trainable['xs_vali'][...,xrgb]
+  y2 = trainable['ys_vali'][...,yrgb]
+  validat = [x2,y2]
+
+  for i in [1,2,3]:
+    res = plotlist(traindat, i)
+    # if i in [2,3]: res = zoom(res,(5,1,1), order=1)
+    io.imsave(savepath / 'data_train_{:d}.png'.format(i), res)
+    res = plotlist(validat,  i)
+    # if i in [2,3]: res = zoom(res,(5,1,1), order=1)
+    io.imsave(savepath / 'data_vali_{:d}.png'.format(i), res)
+
+def predict_trainvali(net, trainable, visuals, savepath):
+  xrgb = visuals['xrgb']
+  yrgb = visuals['yrgb']
+  plotlist = visuals['plotlist']
+
+  pred_train = net.predict(trainable['xs_train'],batch_size=1)
+  pred_vali  = net.predict(trainable['xs_vali'],batch_size=1)
+
+  x1 = trainable['xs_train'][...,xrgb]
+  y1 = trainable['ys_train'][...,yrgb]
+  z1 = pred_train[...,yrgb]
+  traindat = [x1,y1,z1]
+
+  x2 = trainable['xs_vali'][...,xrgb]
+  y2 = trainable['ys_vali'][...,yrgb]
+  z2 = pred_vali[...,yrgb]
+  validat = [x2,y2,z2]
+
+  for i in [1,2,3]:
+    res = plotlist(traindat, i)
+    # if i in [2,3]: res = zoom(res,(5,1,1), order=1)
+    io.imsave(savepath / 'pred_train_{:d}.png'.format(i), res)
+    res = plotlist(validat,  i)
+    # if i in [2,3]: res = zoom(res,(5,1,1), order=1)
+    io.imsave(savepath / 'pred_vali_{:d}.png'.format(i), res)
+
+def plotgrid(lst, c=5):
+  "each element of lst is a numpy array with axes 'SYXC'"
+  res = np.stack(lst,0)
+  res = pad_divisible(res, 1, c)
+  r = res.shape[1]//c
+  res = splt(res, r, 1)
+  res = collapse2(res, 'iRCyxc','Ry,Cix,c')
+  return res
+
+def pad_divisible(arr, dim, mult):
+  s = arr.shape[dim]
+  r = s % mult
+  padding = np.zeros((arr.ndim,2), dtype=np.int)
+  padding[dim,1] = (mult - r)%mult
+  arr = np.pad(arr,padding,mode='constant')
+  return arr
+
+def copy_split(xsysws):
   xs = xsysws['xs']
   ys = xsysws['ys']
   ws = xsysws['ws']
 
-  ## shuffle
-  inds = np.arange(xs.shape[0])
-  np.random.shuffle(inds)
-  invers = np.argsort(np.arange(inds.shape[0])[inds])
-  xs = xs[inds]
-  ys = ys[inds]
-  ws = ws[inds]
-
-  ## train vali split
-  split = 5
-  n_vali = xs.shape[0]//split
-  xs_train = xs[:-n_vali]
-  ys_train = ys[:-n_vali]
-  ws_train = ws[:-n_vali]
-  xs_vali  = xs[-n_vali:]
-  ys_vali  = ys[-n_vali:]
-  ws_vali  = ws[-n_vali:]
+  xs_train = xs.copy()
+  ys_train = ys.copy()
+  ws_train = ws.copy()
+  xs_vali  = xs.copy()
+  ys_vali  = ys.copy()
+  ws_vali  = ws.copy()
 
   res = dict()
   res['xs_train'] = xs_train
@@ -150,14 +202,110 @@ def shuffle_split(xsysws):
 
   return res
 
-def train(net, trainable, savepath, n_epochs=10, batchsize=3):
-  xs_train = trainable['xs_train']
-  ys_train = trainable['ys_train']
-  ws_train = trainable['ws_train']
-  xs_vali  = trainable['xs_vali']
-  ys_vali  = trainable['ys_vali']
-  ws_vali  = trainable['ws_vali']
-  ysem = trainable['ysem']
+def one_vali(xsysws):
+  xs = xsysws['xs']
+  ys = xsysws['ys']
+  ws = xsysws['ws']
+
+  xs_train = xs.copy()
+  ys_train = ys.copy()
+  ws_train = ws.copy()
+  xs_vali  = xs.copy()
+  ys_vali  = ys.copy()
+  ws_vali  = ws.copy()
+
+  res = dict()
+  res['xs_train'] = xs_train
+  res['xs_vali'] = xs_train[[0]]
+  res['ys_train'] = ys_train
+  res['ys_vali'] = ys_train[[0]]
+  res['ws_train'] = ws_train
+  res['ws_vali'] = ws_train[[0]]
+
+  return res
+
+def copy_split_mask_vali(xsysws):
+  xs = xsysws['xs']
+  ys = xsysws['ys']
+  ws = xsysws['ws']
+  tm = xsysws['tm']
+  vm = xsysws['vm']
+
+  xs_train = xs.copy()
+  ys_train = ys.copy()
+  ws_train = ws.copy()
+  xs_vali  = xs.copy()
+  ys_vali  = ys.copy()
+  ws_vali  = ws.copy()
+
+  ws_train[vm] = 0
+  ws_vali[tm] = 0
+  ys_train = np.concatenate([ys_train, ws_train[...,np.newaxis]], -1)
+  ys_vali  = np.concatenate([ys_vali, ws_vali[...,np.newaxis]], -1)
+
+  res = dict()
+  res['xs_train'] = xs_train
+  res['xs_vali'] = xs_vali
+  res['ys_train'] = ys_train
+  res['ys_vali'] = ys_vali
+  res['ws_train'] = ws_train
+  res['ws_vali'] = ws_vali
+
+  return res
+
+def shuffle_split_dep(xsysws, split=5, inds=None):
+  xs = xsysws['xs']
+  ys = xsysws['ys']
+  ws = xsysws['ws']
+
+  ## shuffle
+  if inds is None:
+    inds = np.arange(xs.shape[0])
+    np.random.shuffle(inds)
+  invers = np.argsort(np.arange(inds.shape[0])[inds])
+  xs = xs[inds]
+  ys = ys[inds]
+  ws = ws[inds]
+
+  ## train vali split
+  n_vali = xs.shape[0]//split
+
+  res = dict()
+  res['xs_train'] = xs[:-n_vali]
+  res['xs_vali']  = xs[-n_vali:]
+  res['ys_train'] = ys[:-n_vali]
+  res['ys_vali']  = ys[-n_vali:]
+  res['ws_train'] = ws[:-n_vali]
+  res['ws_vali']  = ws[-n_vali:]
+  res['inds'] = inds
+  res['invers'] = invers
+
+  return res
+
+def shuffle_split(xsysws_slices, split=5, inds=None):
+  d = xsysws_slices
+  res = dict()
+  if inds is None:
+    np.random.seed(0)
+    inds = np.arange(len(d['slices']))
+    np.random.shuffle(inds)
+  n_vali = len(inds) // split
+  res['xs_train'] = d['xs'][inds][:-n_vali]
+  res['xs_vali']  = d['xs'][inds][-n_vali:]
+  res['ys_train'] = d['ys'][inds][:-n_vali]
+  res['ys_vali']  = d['ys'][inds][-n_vali:]
+  res['ws_train'] = d['ws'][inds][:-n_vali]
+  res['ws_vali']  = d['ws'][inds][-n_vali:]
+  res['slices_train'] = np.array(d['slices'])[inds][:-n_vali].tolist()
+  res['slices_vali']  = np.array(d['slices'])[inds][-n_vali:].tolist()
+  res['inds'] = inds
+  return res
+
+def train(net, trainable, savepath, n_epochs=10, batchsize=3, callbacks=[]):
+  xs_train = trainable['train']['xs']
+  ys_train = trainable['train']['ys']
+  xs_vali  = trainable['vali']['xs']
+  ys_vali  = trainable['vali']['ys']
 
   stepsperepoch   = xs_train.shape[0] // batchsize
   validationsteps = xs_vali.shape[0] // batchsize
@@ -177,10 +325,14 @@ def train(net, trainable, savepath, n_epochs=10, batchsize=3):
   current_weight_number = glob_and_parse_filename(str(savepath / "w???.h5"))
   if current_weight_number is None: current_weight_number = 0
   weightname = str(savepath / "w{:03d}.h5".format(current_weight_number + 1))
-  checkpointer = ModelCheckpoint(filepath=weightname, verbose=0, save_best_only=True, save_weights_only=True)
+  checkpointer = ModelCheckpoint(filepath=weightname, verbose=0, save_best_only=False, save_weights_only=True)
   earlystopper = EarlyStopping(patience=30, verbose=0)
   reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
-  callbacks = [checkpointer, earlystopper, reduce_lr]
+  callbacks += [
+               checkpointer,
+               # earlystopper,
+               # reduce_lr,
+               ]
 
   # f_trainaug = lambda x,y:random_augmentation_xy(x,y,train=True)
   f_trainaug = lambda x,y:(x,y)
@@ -209,7 +361,47 @@ def train(net, trainable, savepath, n_epochs=10, batchsize=3):
                     validation_steps=validationsteps)
 
   net.save_weights(str(savepath / "w{:03d}_final.h5".format(current_weight_number + 1)))
+  history.history['current_weight_number'] = current_weight_number
+  history.history['weightname'] = weightname
   return history
+
+
+
+def train_gen(net, train_gen, vali_gen, savepath, steps_per_epoch=50, vali_steps=10, n_epochs=10, batchsize=1, callbacks=[]):
+
+  def print_stats():
+    stats = dict()
+    stats['batchsize'] = batchsize
+    stats['n_epochs']  = n_epochs
+    stats['steps_per_epoch'] = steps_per_epoch
+    stats['vali_steps'] = vali_steps
+  print_stats()
+
+  current_weight_number = glob_and_parse_filename(str(savepath / "w???.h5"))
+  if current_weight_number is None: current_weight_number = 0
+  weightname = str(savepath / "w{:03d}.h5".format(current_weight_number + 1))
+  checkpointer = ModelCheckpoint(filepath=weightname, verbose=0, save_best_only=True, save_weights_only=True)
+  earlystopper = EarlyStopping(patience=30, verbose=0)
+  reduce_lr    = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0)
+  callbacks += [
+               checkpointer,
+               # earlystopper,
+               # reduce_lr,
+               ]
+
+  history = net.fit_generator(train_gen,
+                    steps_per_epoch=steps_per_epoch,
+                    epochs=n_epochs,
+                    verbose=1,
+                    callbacks=callbacks,
+                    validation_data=vali_gen,
+                    validation_steps=vali_steps)
+
+  net.save_weights(str(savepath / "w{:03d}_final.h5".format(current_weight_number + 1)))
+  history.history['current_weight_number'] = current_weight_number
+  history.history['weightname'] = weightname
+  return history.history
+
 
 ## predictions from trained network
 
@@ -274,35 +466,40 @@ def predict_on_new_3D_old(net,img):
 
 ## plotting
 
-def plot_history(history, savepath=None):
+def plot_history(history, start=0, savepath=None):
   if savepath:
-    print(history.history, file=open(savepath / 'history.txt','w'))
+    print(history, file=open(savepath / 'history.txt','w'))
   def plot_hist_key(k):
     plt.figure()
-    y1 = history.history[k]
-    y2 = history.history['val_' + k]
-    plt.plot(y1, label=k)
-    plt.plot(y2, label='val_' + k)
+    y1 = history[k]
+    plt.plot(y1[start:], label=k)
+    y2 = history['val_' + k]
+    plt.plot(y2[start:], label='val_' + k)
     plt.legend()
     if savepath:
       plt.savefig(savepath / (k + '.png'))
-  keys = history.history.keys()
+  keys = history.keys()
   for k in keys:
     if 'val_'+k in keys:
       plot_hist_key(k)
+    
 
 ## run-style functions requiring
 
+def segment(pimg, segparams):
+  f = segparams['function']
+  hyp = f(pimg, segparams['params'])
+  return hyp
+
 def optimize_segmentation(pimg, rawdata, segparams, mypath_opt):
-  lab  = rawdata['lab']
-  inds = rawdata['inds_labeled_slices'][:,:-4]
+  inds = rawdata['inds_labeled_slices']
   ## recompute gt_slices! don't use gt_slices from rawdata
-  gt_slices = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  gt_slices = rawdata['gt_slices']
   stack_segmentation_function = segparams['function']
   segmentation_space = segparams['space']
   segmentation_info = segparams['info']
   n_evals = segparams['n_evals']
-  img_instseg = pimg[[0]]
+  img_instseg = pimg #[[0]]
 
   ## optimization params
   # mypath_opt = add_numbered_directory(savepath, 'opt')
@@ -423,13 +620,42 @@ def optimize_segmentation(pimg, rawdata, segparams, mypath_opt):
 
   return best
 
+def hyp2hypslices(hyp, inds, axss):
+  assert hyp.ndim == 3
+  def f(ind,i):
+    ss = [slice(None) for _ in range(3)] 
+    ss[i] = ind
+    return ss
+  hyp_slices = [hyp[f(ind,i)] for ind,i in zip(inds, axss)]
+  return hyp_slices
+
+def scores(hyp_slices, gt_slices):
+  seg_scores = np.array([ss.seg(x,y) for x,y in zip(gt_slices, hyp_slices)])
+  return seg_scores
+
+def seg_score_slices_on_timeseries(hyps, gt_slice_data):
+  gt_slices = gt_slice_data['gt_slices']
+  inds_labeled_slices = gt_slice_data['inds_labeled_slices']
+  times = inds_labeled_slices[0]
+  zs = inds_labeled_slices[1]
+  axss = np.zeros(zs.shape[0])
+  for i in set(times):
+    hypslices = hyp2hypslices(hyp[times==i], zs[times==i], axss[times==i])
+    seg_scores = scores(hypslices, gt_slices[times==i])
+    print(seg_scores)
+    print(seg_scores.mean())
+
+def compute_seg_scores(m, img, net, gt_slice_data):
+  pimg = m.predict()
+
 def compute_seg_on_slices(hyp, rawdata):
   print("COMPARE SEGMENTATION AGAINST LABELED SLICES")
   inds_labeled_slices = rawdata['inds_labeled_slices']
   lab = rawdata['lab']
   img = rawdata['img']
-  inds = inds_labeled_slices[:,:-4] # use full
-  gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  inds = rawdata['inds_labeled_slices'] #[:,:-4] # use full
+  gt_slices = rawdata['gt_slices']
+  # gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
   pre_slices = hyp[inds[0], inds[1]]
   seg_scores = np.array([ss.seg(x,y) for x,y in zip(gt_slices, pre_slices)])
   # print({'seg': seg_scores.mean(), 'std':seg_scores.std()}, file=open(savepath / 'SEG.txt','w'))
@@ -441,9 +667,9 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
   inds = rawdata['inds_labeled_slices']
   lab = rawdata['lab']
   img = rawdata['img']
-  ch_nuc_img = channel_semantics()['nuc']
-
-  np.save(savepath / 'hyp', hyp)
+  gt_slices = rawdata['gt_slices']
+  imgsem = rawdata['imgsem']
+  ch_nuc_img = imgsem['nuc']
 
   print("COMPARE SEGMENTATION AGAINST LABELED SLICES")
   seg_scores = compute_seg_on_slices(hyp, rawdata)
@@ -451,7 +677,7 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
   
   print("CREATE DISPLAY GRID OF SEGMENTATION RESULTS")
   img_slices = img[inds[0], inds[1]]
-  gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
+  # gt_slices  = np.array([lab2instance(x) for x in lab[inds[0], inds[1]]])
   pre_slices = hyp[inds[0], inds[1]]
   # container = np.zeros((1600,1600,3))
   # slices = patchmaker.slices_heterostride((1600,1600),(400,400))
@@ -469,7 +695,7 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
     psg = ss.pixel_sharing_bipartite(im3, im2)
     matching = ss.matching_iou(psg, fraction=0.5)
     ax = plotting.make_comparison_image(im1,im2,im3,matching,ax=ax)
-    ipdb.set_trace()
+    # ipdb.set_trace()
     # container[slices[i]] = ax
     # res.append(ax.get_array())
     ax.set_axis_off()
@@ -479,10 +705,15 @@ def analyze_hyp(hyp, rawdata, segparams, savepath):
   
   print("INSTANCE SEGMENTATION ANALYSIS COMPLETE")
 
+
+
+
+## tracking
+
 def build_nhl(hyp, rawdata, savepath):
   print("GENERATE NHLS FROM HYP AND ANALYZE")
   img = rawdata['img']
-  ch_nuc_img = channel_semantics()['nuc']
+  ch_nuc_img = imgsem['nuc']
   nhls = nhl_tools.labs2nhls(hyp, img[:,:,ch_nuc_img])
   pickle.dump(nhls, open(savepath / 'nhls.pkl', 'wb'))
 
@@ -641,6 +872,18 @@ But the results in xz and yz are still inadequate for segmentation.
 ## Tue Jul 17 20:00:41 2018
 
 make n_epochs and batchsize params
+
+## Thu Aug 23 15:41:30 2018
+
+Add functions that take pimg or even raw img and a set of annotated gt slices and computes slice-wise seg score.
+We want to be able to compute seg scores on slices from single stack and list of inds and orientations
+(or maybe just slices?) knowing that the time is correct...
+we also want to be able to be able to quickly get a list of slices from a large block.
+
+added class weights to pixwelwise weight stack
+
+
+
 
 TODO:
 - [ ] (linearly or isonet) upscale *before* training.

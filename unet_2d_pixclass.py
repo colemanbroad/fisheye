@@ -30,7 +30,7 @@ def build_rawdata(homedir):
   ## load data
   # img = imread(str(homedir / 'data/img006.tif'))
   img = np.load(str(homedir / 'data/img006_noconv.npy'))
-  img = perm(img,"TZCYX", "TZYXC")
+  img = perm(img, "TZCYX", "TZYXC")
   imgsem = {'axes':"TZYXC", 'nuc':0, 'mem':1, 'n_channels':2}
 
   # img = np.load(str(homedir / 'isonet/restored.npy'))
@@ -63,25 +63,26 @@ def compute_weights(rawdata):
   mask_labeled_slices = rawdata['mask_labeled_slices']
   inds_labeled_slices = rawdata['inds_labeled_slices']
 
-  weight_stack = np.zeros(lab.shape,dtype=np.float)
-  
+  weight_stack = np.zeros(lab.shape,dtype=np.float)  
   weight_stack[inds_labeled_slices[0], inds_labeled_slices[1]] = 1 ## all the pixels that have been looked at by a human set to 1.
 
-  ignore = labsem['ignore']
   ## turn off the `ignore` class
-  weight_stack[lab==ignore] = 0
+  if False:
+    ignore = labsem['ignore']
+    weight_stack[lab==ignore] = 0
 
   ## weight higher near object borders
-  for i in range(len(inds_labeled_slices[0])):
-    t = inds_labeled_slices[0,i]
-    z = inds_labeled_slices[1,i]
-    lab_tz = lab[t,z]
-    mask = lab_tz==labsem['mem']
-    distimg = ~mask
-    distimg = distance_transform_edt(distimg)
-    distimg = np.exp(-distimg/10)
-    print(distimg.mean())
-    weight_stack[t,z] = distimg/distimg.mean()
+  if False:
+    for i in range(len(inds_labeled_slices[0])):
+      t = inds_labeled_slices[0,i]
+      z = inds_labeled_slices[1,i]
+      lab_tz = lab[t,z]
+      mask = lab_tz==labsem['mem']
+      distimg = ~mask
+      distimg = distance_transform_edt(distimg)
+      distimg = np.exp(-distimg/10)
+      print(distimg.mean())
+      weight_stack[t,z] = distimg/distimg.mean()
 
   if False: ## debug
     ws = weight_stack[inds_labeled_slices[0], inds_labeled_slices[1]]
@@ -94,20 +95,21 @@ def build_trainable(rawdata):
   lab = rawdata['lab']
   labsem = rawdata['labsem']
 
-  dz = 2
+  dz = 5
   nzdim = 2*dz+1
   xsem = {'n_channels':2*nzdim, 'mem':2*dz, 'nuc':2*dz+1, 'shape':(None,None,2*nzdim), 'dz':dz, 'nzdim':nzdim}
   ysem = {'n_channels':3, 'nuc':1, 'mem':0, 'bg':2, 'weight_channel_ytrue':True, 
           'shape':(None,None,None,3), 'classweights':[1/3]*3,}
 
   weight_stack = compute_weights(rawdata)
+  train_mask = np.random.rand(*lab.shape) > 1/6
+  vali_mask = ~train_mask ## need to copy data because of zero padding later
 
   ## build slices
   patchsize = (1,nzdim,200,200)
-  # assert 4 in factors(patchsize[1])
+  xsem['patchsize'] = patchsize
   res = patchmaker.patchtool({'img':img.shape[:-1], 'patch':patchsize, 'overlap_factor':(1,nzdim,1,1)})
   slices = res['slices']
-  xsem['patchsize'] = patchsize
   # xsem['borders'] = borders
 
   borders = (0,dz,0,0)
@@ -123,8 +125,10 @@ def build_trainable(rawdata):
   # slices_filtered = slices_filtered[:20]
   xs = np.array([img[ss][0] for ss in slices_filtered])
   ys = np.array([lab[ss][0] for ss in slices_filtered])
-  ws = np.array([weight_stack[ss][0] for ss in slices_filtered])
   ys = np_utils.to_categorical(ys).reshape(ys.shape + (-1,))
+  ws = np.array([weight_stack[ss][0] for ss in slices_filtered])
+  tm = np.array([train_mask[ss][0] for ss in slices_filtered])
+  vm = np.array([vali_mask[ss][0] for ss in slices_filtered])
 
   ## normalize over space. sample and channel independent
   xs = xs/np.mean(xs,(1,2,3), keepdims=True)
@@ -133,13 +137,16 @@ def build_trainable(rawdata):
   xs = collapse2(xs, 'szyxc','s,y,x,zc') ## szyxc
   ys = ys[:,xsem['dz']] ## szyxc
   ws = ws[:,xsem['dz']] ## szyx
+  tm = tm[:,xsem['dz']] ## szyx
+  vm = vm[:,xsem['dz']] ## szyx
 
-  if ysem['weight_channel_ytrue']:
-    ys = np.concatenate([ys, ws[...,np.newaxis]], -1)
+  # if ysem['weight_channel_ytrue']:
+  #   ys = np.concatenate([ys, ws[...,np.newaxis]], -1)
   
   print(xs.shape, ys.shape, ws.shape)
 
-  res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws})
+  res = ts.copy_split_mask_vali({'xs':xs,'ys':ys,'ws':ws,'tm':tm,'vm':vm})
+  # res = ts.shuffle_split({'xs':xs,'ys':ys,'ws':ws})
   res['xsem'] = xsem
   res['ysem'] = ysem
   res['slices'] = slices
@@ -148,10 +155,10 @@ def build_trainable(rawdata):
 
 def build_net(xsem, ysem):
   unet_params = {
-    'n_pool' : 2,
+    'n_pool' : 3,
     'n_convolutions_first_layer' : 16,
     'dropout_fraction' : 0.2,
-    'kern_width' : 3,
+    'kern_width' : 5,
   }
 
   input0 = Input(xsem['shape'])
@@ -199,7 +206,10 @@ def show_trainvali(trainable, savepath):
     ys = norm(ys[...,yrgb])
     xs[...,2] = 0
     res = np.stack([xs,ys],0)
-    res = collapse2(res, 'isyxc','sy,ix,c')
+    n_patches = res.shape[1]
+    r, c = max(1, n_patches//8), 8
+    res = splt(res[:,:r*c], r, 1)
+    res = collapse2(res, 'iRCyxc','Ry,Cix,c')
     return res
 
   def doit(i):
@@ -243,7 +253,10 @@ def predict_trainvali(net, trainable, savepath=None):
     preds = norm(preds[...,yrgb])
     xs[...,2] = 0
     res = np.stack([xs,ys,preds],0)
-    res = collapse2(res, 'isyxc','sy,ix,c')
+    n_patches = res.shape[1]
+    r, c = max(1, n_patches//5), 5
+    res = splt(res[:,:r*c], r, 1)
+    res = collapse2(res, 'iRCyxc','Ry,Cix,c')
     return res
 
   def doit(i):
@@ -262,9 +275,10 @@ def predict(net,img,xsem,ysem):
   container = np.zeros(img.shape[:-1] + (ysem['n_channels'],))
   
   dz = xsem['dz']
+  nzdim = xsem['nzdim']
 
   borders = [0,dz,0,0]
-  patchshape_padded = [1,1+2*dz,400,400]
+  patchshape_padded = [1,nzdim,400,400]
   padding = [(b,b) for b in borders] + [(0,0)]
 
   patches = patchmaker.patchtool({'img':container.shape[:-1], 'patch':patchshape_padded, 'borders':borders})
@@ -303,6 +317,14 @@ Let's compare this vali = 0.222 result with the same number of epochs and patche
 let's change the normalization.
 
 
+
+Now let's compare the results of different models.
+We want to compare the abilities of different models to find boundaries between cells.
+And we should compare their crossentropy scores as well as their seg scores.
+
+## Mon Jul 30 00:34:33 2018
+
+Better shapes for `show_trainvali` and `predict_trainvali` outputs.
 
 """
 
