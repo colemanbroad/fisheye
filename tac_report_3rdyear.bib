@@ -1,0 +1,100 @@
+@preamble{ " \newcommand{\noop}[1]{} " } % a do-nothing command that serves a purpose
+
+## Bibliography for TAC report 3
+
+@inproceedings{kainmueller2014active,
+  title={Active graph matching for automatic joint segmentation and annotation of C. elegans},
+  author={Kainmueller, Dagmar and Jug, Florian and Rother, Carsten and Myers, Gene},
+  booktitle={International Conference on Medical Image Computing and Computer-Assisted Intervention},
+  pages={81--88},
+  year={2014},
+  organization={Springer}
+}
+- cited 7
+- actually does something very similar to our tracking approach!! they have 2nd order costs which are functions of two matching edges! And what's really cool... they optimize in a two-step way:
+ 1. first a fast optimization w gradient info in smooth space for rigid registration\
+ 2. a local (ILP-solving?) matching step which evaluates how well proposal matches to atlas.
+
+
+  @article{amat2014fast,
+    title={Fast, accurate reconstruction of cell lineages from large-scale fluorescence microscopy data},
+    author={Amat, Fernando and Lemon, William and Mossing, Daniel P and McDole, Katie and Wan, Yinan and Branson, Kristin and Myers, Eugene W and Keller, Philipp J},
+    journal={Nature methods},
+    volume={11},
+    number={9},
+    pages={951},
+    year={2014},
+    publisher={Nature Publishing Group}}
+
+  @inproceedings{jug2014tracking,
+    title={Tracking by assignment facilitates data curation},
+    author={Jug, Florian and Pietzsch, Tobias and Kainm{\"u}ller, Dagmar and Myers, Gene},
+    booktitle={MICCAI IMIC Workshop},
+    volume={2},
+    year={2014}}
+
+@inproceedings{broaddus2019cell,
+	title={Cell nuclei detection and segmentation from weak annotations},
+	author={Broaddus, Coleman and Weigert, Martin and Schmidt, Uwe and Myers, Gene},
+	year={submitted},
+	booktitle={IEEE International Symposium on Biomedical Imaging (ISBI)}
+	}
+
+@article{bao2006automated,
+  title={Automated cell lineage tracing in Caenorhabditis elegans},
+  author={Bao, Zhirong and Murray, John I and Boyle, Thomas and Ooi, Siew Loon and Sandel, Matthew J and Waterston, Robert H},
+  journal={Proceedings of the National Academy of Sciences},
+  volume={103},
+  number={8},
+  pages={2707--2712},
+  year={2006},
+  publisher={National Acad Sciences}
+}
+
+@article{mace2013high,
+  title={A high fidelity cell lineage tracing method for obtaining systematic spatiotemporal gene expression patterns in Caenorhabditis elegans},
+  author={Mace, Daniel L and Weisdepp, Peter and Gevirtzman, Louis and Boyle, Thomas and Waterston, Robert H},
+  journal={G3: Genes, Genomes, Genetics},
+  pages={g3--113},
+  year={2013},
+  publisher={G3: Genes, Genomes, Genetics}
+}
+
+@article{magnusson2015global,
+  title={Global linking of cell tracks using the Viterbi algorithm},
+  author={Magnusson, Klas EG and Jald{\'e}n, Joakim and Gilbert, Penney M and Blau, Helen M},
+  journal={IEEE transactions on medical imaging},
+  volume={34},
+  number={4},
+  pages={911--929},
+  year={2015},
+  publisher={IEEE}
+}
+
+@inproceedings{ronneberger2015u,
+  title={U-net: Convolutional networks for biomedical image segmentation},
+  author={Ronneberger, Olaf and Fischer, Philipp and Brox, Thomas},
+  booktitle={International Conference on Medical image computing and computer-assisted intervention},
+  pages={234--241},
+  year={2015},
+  organization={Springer}
+}
+
+
+@inproceedings{cciccek20163d,
+  title={3D U-Net: learning dense volumetric segmentation from sparse annotation},
+  author={{\c{C}}i{\c{c}}ek, {\"O}zg{\"u}n and Abdulkadir, Ahmed and Lienkamp, Soeren S and Brox, Thomas and Ronneberger, Olaf},
+  booktitle={International Conference on Medical Image Computing and Computer-Assisted Intervention},
+  pages={424--432},
+  year={2016},
+  organization={Springer}
+}
+
+@inproceedings{he2017mask,
+  title={Mask r-cnn},
+  author={He, Kaiming and Gkioxari, Georgia and Doll{\'a}r, Piotr and Girshick, Ross},
+  booktitle={Computer Vision (ICCV), 2017 IEEE International Conference on},
+  pages={2980--2988},
+  year={2017},
+  organization={IEEE}
+}
