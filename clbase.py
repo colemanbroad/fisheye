@@ -9,7 +9,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 plt.switch_backend('Agg')
 
-import lib
+# import lib
 
 import gputools
 import ipdb
@@ -34,7 +34,7 @@ import segmentation
 
 ## load challenge GT data
 
-spimdir = "/net/fileserver-nfs/stornext/snfs2/projects/myersspimdata/"
+spimdir     = "/net/fileserver-nfs/stornext/snfs2/projects/myersspimdata/"
 greencarpet = "/net/fileserver-nfs/stornext/snfs4/projects/green-carpet/"
 
 seg1 = "/net/fileserver-nfs/stornext/snfs2/projects/myersspimdata/Coleman/Celegans/ISBI/Fluo-N3DH-CE_challenge/01/SEG"

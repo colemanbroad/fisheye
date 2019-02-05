@@ -2,6 +2,34 @@ from clbase import *
 import cltrain as m
 
 
+## matching scores
+
+def matching_2cen(cen,pimg,th):
+  print(pimg.mean(),np.percentile(pimg,[2,50,90,99]))
+  x = cen2pts(cen)
+  y = cen2pts(pimg[0,...,0] > th)
+  kdt = pyKDTree(y)
+  dists, inds = kdt.query(x, k=1, distance_upper_bound=100)
+  indices,counts = np.unique(inds[inds<len(y)],return_counts=True)
+  return x,y,indices,counts
+
+def match_chan(yts,yps,chs=(1,1)):
+  "Samples ZYX C"
+  print(yts.shape,yps.shape)
+  def single(yt,yp):
+    pts0 = cen2pts(yt[...,chs[0]]>0.5)
+    if len(pts0)==0: return 0,0,0
+    pts1 = cen2pts(yp[...,chs[1]]>np.percentile(yp[...,chs[1]],98))
+    if len(pts1)==0: return 0,0,0
+    kdt = pyKDTree(pts1)
+    dists, inds = kdt.query(pts0, k=1, distance_upper_bound=10)
+    uinds,counts = np.unique(inds[inds<len(pts1)], return_counts=True)
+    return len(uinds), len(pts1), len(pts0)
+
+  scores = np.array([single(yt,yp) for yt,yp in zip(yts,yps)])
+  f1 = 2*scores[:,0].sum() / np.maximum(scores[:,[1,2]].sum(),1)
+  return f1
+
 ## do everything
 
 def analyze(traindir,raw,net):

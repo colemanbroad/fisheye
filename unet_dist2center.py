@@ -36,7 +36,6 @@ def build_rawdata(homedir):
   if True:
     cen[list(points.T)] = 1
     cen2 = fftconvolve(cen, kern, mode='same')
-
   
   if False:
     A = np.newaxis
