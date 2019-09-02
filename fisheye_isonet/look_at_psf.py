@@ -361,5 +361,6 @@ The image img006_noconv has 0.1x0.1x0.5 µm voxel spacing. Our psf should have 0
 This problem is now exclusively in the hands of `generate_artificial_xz_slices.py`. 
 We'll provide exclusively isotropic 0.1um, unrotated psfs.
 
+res069 and res070 look like psfs measured from the two channels. They are not aligned! This shows chromatid aberration!
 
 """

@@ -123,4 +123,6 @@ TODO:
 - [ ] try intensity seg after a simple global brightness adjuster.
 
 
+res071 shows the detected centerpoints from two adjacent timepoints.
+
 """

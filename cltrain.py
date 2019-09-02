@@ -113,8 +113,6 @@ def sum_kernels_at_points(pts,kern,out_shape):
     output[ss] += kern
   return output
 
-
-
 ## callback stuff
 
 class GlobalCallback(keras.callbacks.Callback):
