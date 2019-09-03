@@ -1,4 +1,7 @@
-Segmentation and tracking inside the zebrafish retina with deep nets and assignment models.
+---
+Segmenting nuclei inside the zebrafish retina with deep nets.
+---
+
 
 # images
 
@@ -50,7 +53,7 @@ img006_noconv = np.moveaxis(img006_noconv, 0,2)
 shape (11, 10, 2, 189, 216)
 No labels. Just a single division cropped out of img006.
 
-## labels
+# labels
 
 `labels006` the wavy hand-traced sparse labels for img006 created in ilastik.
 Only exists for t=0.
@@ -67,7 +70,7 @@ in the third channel.
 
 `img006_borderlabels` boders around cells in first 10 xy slices in t=0 are drawn. Then each of these 2D cells has a centerpoint annotation. 
 
-## anno
+# anno
 
 `anno000.npy`
 shape (130,2)
@@ -84,6 +87,7 @@ The labels don't change smoothly as we travel through z. sometimes no change at 
 csv with header: Area,Mean,Min,Max,X,Y,Ch,Slice,Frame,Counter,Count
 cell centerpoint annotations for img006, t=1 (2nd timepoint)
 extract them with `lib.mkpoints`
+
 ```
 points = lib.mkpoints()
 cen = np.zeros((71,400,400))
